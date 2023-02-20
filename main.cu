@@ -12,8 +12,9 @@
 #include <thrust/fill.h>
 #include <thrust/extrema.h>
 
+#define THREADS_PER_BLOCK 1024
 #define VERTEX_BLOCK_SIZE 1000
-#define EDGE_BLOCK_SIZE 1000
+#define EDGE_BLOCK_SIZE 10
 #define VERTEX_PREALLOCATE_LIST_SIZE 2000
 #define EDGE_PREALLOCATE_LIST_SIZE 150000
 
@@ -156,6 +157,78 @@ __device__ struct vertex_block* pop_from_vertex_preallocate_queue(unsigned long 
 
 }
 
+__device__ struct vertex_block* parallel_pop_from_vertex_preallocate_queue(unsigned long pop_count, unsigned long id) {
+
+    struct vertex_block *device_vertex_block;
+
+    // do {
+
+    //     current = atomicCAS(&lockvar, 0, 1);
+    //     // current = 0;
+    //     if(current == 0) {
+        
+    //         device_vertex_block = pop_from_vertex_preallocate_queue(1);
+        
+    //         lockvar = 0;
+
+    //         printf("ID = %lu in vertex CS\n", id);
+    //     }
+
+    // } while(current != 0);
+
+    // below code runs for the master thread only
+
+    // unsigned long flag = 0;
+
+    // if(id == 0) {
+
+    if((d_v_queue.count < pop_count) || (d_v_queue.front == -1)) {
+        printf("Vertex queue empty, front = %ld, rear = %ld\n", d_v_queue.front, d_v_queue.rear);        
+        return NULL;
+    }
+    // else
+    //     return NULL;
+
+    // }
+    // if(d_v_queue.front == -1) {
+    //     printf("Vertex queue empty, front = %ld, rear = %ld\n", d_v_queue.front, d_v_queue.rear);
+    //     return NULL;
+    // }
+    // __syncthreads();
+
+    // if(flag) {
+    else {
+
+        device_vertex_block = d_v_queue.vertex_block_address[d_v_queue.front + id];
+        d_v_queue.vertex_block_address[d_v_queue.front + id] = NULL;
+        printf("Popped %p from the vertex queue, placeholders front = %ld, rear = %ld\n", device_vertex_block, d_v_queue.front, d_v_queue.rear);
+
+    }
+
+    __syncthreads();
+
+    if(id == 0) {
+
+        d_v_queue.count -= pop_count;
+
+        printf("Vertex Queue before, front = %ld, rear = %ld\n", d_v_queue.front, d_v_queue.rear);
+        
+        if((d_v_queue.front + pop_count - 1) % VERTEX_PREALLOCATE_LIST_SIZE == d_v_queue.rear) {
+
+            d_v_queue.front = -1;
+            d_v_queue.rear = -1;
+
+        }
+        else
+            d_v_queue.front = (d_v_queue.front + pop_count) % VERTEX_PREALLOCATE_LIST_SIZE;
+
+        printf("Vertex Queue before, front = %ld, rear = %ld\n", d_v_queue.front, d_v_queue.rear);
+
+    }
+
+    return device_vertex_block;
+}
+
 __device__ void push_to_edge_preallocate_queue(struct edge_block *device_edge_block) {
 
     if( (d_e_queue.rear + 1) % EDGE_PREALLOCATE_LIST_SIZE == d_e_queue.front ) {
@@ -201,6 +274,101 @@ __device__ struct edge_block* pop_from_edge_preallocate_queue(unsigned long pop_
 
 }
 
+__device__ unsigned k1counter = 0;
+__device__ unsigned k2counter = 0;
+
+__device__ void parallel_pop_from_edge_preallocate_queue(struct edge_block** device_edge_block, unsigned long pop_count, unsigned long* d_prefix_sum_edge_blocks, unsigned long id, unsigned long thread_blocks) {
+
+    // struct edge_block *device_edge_block;
+
+    // do {
+
+    //     current = atomicCAS(&lockvar, 0, 1);
+    //     // current = 0;
+    //     if(current == 0) {
+        
+    //         device_vertex_block = pop_from_vertex_preallocate_queue(1);
+        
+    //         lockvar = 0;
+
+    //         printf("ID = %lu in vertex CS\n", id);
+    //     }
+
+    // } while(current != 0);
+
+    // below code runs for the master thread only
+
+    // unsigned long flag = 0;
+
+    // if(id == 0) {
+
+    if((d_e_queue.count < pop_count) || (d_e_queue.front == -1)) {
+        printf("Edge queue empty, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);        
+        // return NULL;
+    }
+    // else
+    //     return NULL;
+
+    // }
+    // if(d_v_queue.front == -1) {
+    //     printf("Vertex queue empty, front = %ld, rear = %ld\n", d_v_queue.front, d_v_queue.rear);
+    //     return NULL;
+    // }
+    // __syncthreads();
+
+    // if(flag) {
+    else {
+
+        unsigned long start_index = d_prefix_sum_edge_blocks[id - 1];
+        unsigned long end_index = d_prefix_sum_edge_blocks[id];
+        unsigned long j = 0;
+
+        for(unsigned long i = start_index ; i < end_index ; i++) {
+
+            device_edge_block[j] = d_e_queue.edge_block_address[d_e_queue.front + i];
+            d_e_queue.edge_block_address[d_e_queue.front + i] = NULL;
+            // printf("Popped %p from the edge queue, placeholders front = %ld, rear = %ld\n", device_edge_block[j], d_e_queue.front, d_e_queue.rear);
+
+            j++;
+        }
+
+    }
+
+    __syncthreads();
+
+    // if(id % THREADS_PER_BLOCK == 0) {
+	//     // atomicInc((unsigned *)&k2counter, thread_blocks);
+    //     printf("K1 counter is %u\n", k1counter);
+    //     printf("K2 counter is %u\n", atomicAdd((unsigned *)&k2counter, 1));
+    //     // printf("Thread blocks at GPU is %lu\n", thread_blocks);
+    //     __threadfence();
+	//     // while (k2counter < thread_blocks - 1);
+    // }
+
+    // __syncthreads();
+
+    // if(id == 0) {
+
+    //     d_e_queue.count -= pop_count;
+
+    //     printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+        
+    //     if((d_e_queue.front + pop_count - 1) % EDGE_PREALLOCATE_LIST_SIZE == d_e_queue.rear) {
+
+    //         d_e_queue.front = -1;
+    //         d_e_queue.rear = -1;
+
+    //     }
+    //     else
+    //         d_e_queue.front = (d_e_queue.front + pop_count) % EDGE_PREALLOCATE_LIST_SIZE;
+
+    //     printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+
+    // }
+
+    // return device_edge_block;
+}
+
 // __global__ void push_preallocate_list_to_device_queue_kernel(struct vertex_block** d_vertex_preallocate_list, struct edge_block** d_edge_preallocate_list, struct adjacency_sentinel** d_adjacency_sentinel_list, unsigned long vertex_blocks_count_init, unsigned long *edge_blocks_count_init, unsigned long total_edge_blocks_count_init) {
 __global__ void push_preallocate_list_to_device_queue_kernel(struct vertex_block* d_vertex_preallocate_list, struct edge_block* d_edge_preallocate_list, struct adjacency_sentinel** d_adjacency_sentinel_list, unsigned long vertex_blocks_count_init, unsigned long *edge_blocks_count_init, unsigned long total_edge_blocks_count_init) {
 
@@ -238,6 +406,137 @@ __global__ void push_preallocate_list_to_device_queue_kernel(struct vertex_block
 
 }
 
+__global__ void data_structure_init() {
+
+    d_v_queue.front = -1;
+    d_v_queue.rear = -1;
+    d_v_queue.count = 0;
+    d_e_queue.front = -1;
+    d_e_queue.rear = -1;
+    d_e_queue.count = 0;
+
+}
+
+__global__ void parallel_push_vertex_preallocate_list_to_device_queue(struct vertex_block* d_vertex_preallocate_list, struct adjacency_sentinel** d_adjacency_sentinel_list, unsigned long vertex_blocks_count_init) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(id < vertex_blocks_count_init) {
+
+        // some inits, don't run the below two initializations again or queue will fail
+        // d_v_queue.front = -1;
+        // d_v_queue.rear = -1;
+        // d_e_queue.front = -1;
+        // d_e_queue.rear = -1;
+
+        // printf("Pushing vertex blocks to vertex queue\n");
+
+        // for(unsigned long i = 0 ; i < vertex_blocks_count_init ; i++) {
+        
+            // printf("%lu -> %p\n", i, d_vertex_preallocate_list[i]);
+        printf("%lu -> %p\n", id, d_vertex_preallocate_list + id);
+
+        // d_vertex_preallocate_list[i]->active_vertex_count = 1909;
+
+        // push_to_vertex_preallocate_queue(d_vertex_preallocate_list[i]);
+        // push_to_vertex_preallocate_queue(d_vertex_preallocate_list + i);
+
+        unsigned long free_blocks = VERTEX_PREALLOCATE_LIST_SIZE - d_v_queue.count;
+
+        if( (free_blocks < vertex_blocks_count_init) || (d_v_queue.rear + vertex_blocks_count_init) % VERTEX_PREALLOCATE_LIST_SIZE == d_v_queue.front ) {
+            printf("Vertex queue Full, front = %ld, rear = %ld\n", d_v_queue.front, d_v_queue.rear);
+
+            return;
+        }
+        // else if (d_v_queue.front == -1)
+        //     d_v_queue.front = 0;
+
+        // d_v_queue.rear = (d_v_queue.rear + 1) % VERTEX_PREALLOCATE_LIST_SIZE;
+        // // d_v_queue.vertex_block_address[d_v_queue.rear] = device_vertex_block;
+        // d_v_queue.count++;
+
+        d_v_queue.vertex_block_address[id] = d_vertex_preallocate_list + id;
+
+        // printf("Inserted %p to the vertex queue, front = %ld, rear = %ld\n", d_v_queue.vertex_block_address[id], d_v_queue.front, d_v_queue.rear);
+
+
+        // }
+
+    }
+
+}
+
+// parallel_push_edge_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, dapl, ebci, total_edge_blocks_count_init);
+// __global__ void push_preallocate_list_to_device_queue_kernel(struct vertex_block* d_vertex_preallocate_list, struct edge_block* d_edge_preallocate_list, struct adjacency_sentinel** d_adjacency_sentinel_list, unsigned long vertex_blocks_count_init, unsigned long *edge_blocks_count_init, unsigned long total_edge_blocks_count_init) {
+
+__global__ void parallel_push_edge_preallocate_list_to_device_queue(struct edge_block* d_edge_preallocate_list, struct adjacency_sentinel** d_adjacency_sentinel_list, unsigned long *edge_blocks_count_init, unsigned long total_edge_blocks_count_init) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(id < total_edge_blocks_count_init) {
+
+        // some inits, don't run the below two initializations again or queue will fail
+        // d_v_queue.front = -1;
+        // d_v_queue.rear = -1;
+        // d_e_queue.front = -1;
+        // d_e_queue.rear = -1;
+
+        // printf("Pushing vertex blocks to vertex queue\n");
+
+        // for(unsigned long i = 0 ; i < vertex_blocks_count_init ; i++) {
+        
+            // printf("%lu -> %p\n", i, d_vertex_preallocate_list[i]);
+        printf("%lu -> %p\n", id, d_edge_preallocate_list + id);
+
+        // d_vertex_preallocate_list[i]->active_vertex_count = 1909;
+
+        // push_to_vertex_preallocate_queue(d_vertex_preallocate_list[i]);
+        // push_to_vertex_preallocate_queue(d_vertex_preallocate_list + i);
+
+        unsigned long free_blocks = EDGE_PREALLOCATE_LIST_SIZE - d_e_queue.count;
+
+        if( (free_blocks < total_edge_blocks_count_init) || (d_e_queue.rear + total_edge_blocks_count_init) % EDGE_PREALLOCATE_LIST_SIZE == d_e_queue.front ) {
+            printf("Edge queue Full, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+
+            return;
+        }
+        // else if (d_v_queue.front == -1)
+        //     d_v_queue.front = 0;
+
+        // d_v_queue.rear = (d_v_queue.rear + 1) % VERTEX_PREALLOCATE_LIST_SIZE;
+        // // d_v_queue.vertex_block_address[d_v_queue.rear] = device_vertex_block;
+        // d_v_queue.count++;
+
+        d_e_queue.edge_block_address[id] = d_edge_preallocate_list + id;
+
+        // printf("Inserted %p to the edge queue, front = %ld, rear = %ld\n", d_e_queue.edge_block_address[id], d_e_queue.front, d_e_queue.rear);
+
+
+        // }
+
+    }
+
+}
+
+__global__ void parallel_push_queue_update(unsigned long vertex_blocks_count_init, unsigned long total_edge_blocks_count_init) {
+
+    if (d_v_queue.front == -1)
+        d_v_queue.front = 0;
+
+    d_v_queue.rear = (d_v_queue.rear + vertex_blocks_count_init) % VERTEX_PREALLOCATE_LIST_SIZE;
+    // d_v_queue.vertex_block_address[d_v_queue.rear] = device_vertex_block;
+    d_v_queue.count += vertex_blocks_count_init;
+
+    if (d_e_queue.front == -1)
+        d_e_queue.front = 0;
+
+    d_e_queue.rear = (d_e_queue.rear + total_edge_blocks_count_init) % EDGE_PREALLOCATE_LIST_SIZE;
+    // d_v_queue.vertex_block_address[d_v_queue.rear] = device_vertex_block;
+    d_e_queue.count += total_edge_blocks_count_init;
+
+}
+
+
 // __device__ volatile unsigned int current;
 // __device__ unsigned int lockvar = 0;
 
@@ -262,22 +561,30 @@ __global__ void vertex_dictionary_init(struct vertex_block* d_vertex_preallocate
 
         struct vertex_block *device_vertex_block;
 
-        do {
+        // do {
 
-            current = atomicCAS(&lockvar, 0, 1);
-            // current = 0;
-            if(current == 0) {
+        //     current = atomicCAS(&lockvar, 0, 1);
+        //     // current = 0;
+        //     if(current == 0) {
             
-                device_vertex_block = pop_from_vertex_preallocate_queue(1);
+        //         device_vertex_block = pop_from_vertex_preallocate_queue(1);
             
-                lockvar = 0;
+        //         lockvar = 0;
 
-                printf("ID = %lu in vertex CS\n", id);
-            }
+        //         printf("ID = %lu in vertex CS\n", id);
+        //     }
 
-        } while(current != 0);
+        // } while(current != 0);
 
         // critical section end
+
+        // parallel test code start
+
+        
+
+        device_vertex_block = parallel_pop_from_vertex_preallocate_queue( vertex_blocks_count_init, id);
+
+        // parallel test code end
 
         // assigning first vertex block to the vertex sentinel node
         if(id == 0)
@@ -347,8 +654,9 @@ __global__ void vertex_dictionary_init(struct vertex_block* d_vertex_preallocate
 
 __device__ unsigned int lockvar = 0;
 
+
 // __global__ void adjacency_list_init(struct edge_block** d_edge_preallocate_list, unsigned long *d_edge_blocks_count_init, struct graph_properties *d_graph_prop, unsigned long *d_source, unsigned long *d_destination, unsigned long total_edge_blocks_count_init, unsigned long vertex_size, unsigned long edge_size) {
-__global__ void adjacency_list_init(struct edge_block* d_edge_preallocate_list, unsigned long *d_edge_blocks_count_init, struct graph_properties *d_graph_prop, unsigned long *d_source, unsigned long *d_destination, unsigned long total_edge_blocks_count_init, unsigned long vertex_size, unsigned long edge_size) {
+__global__ void adjacency_list_init(struct edge_block* d_edge_preallocate_list, unsigned long *d_edge_blocks_count_init, struct graph_properties *d_graph_prop, unsigned long *d_source, unsigned long *d_destination, unsigned long total_edge_blocks_count_init, unsigned long vertex_size, unsigned long edge_size, unsigned long *d_prefix_sum_edge_blocks, unsigned long thread_blocks) {
 	
     unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -358,7 +666,11 @@ __global__ void adjacency_list_init(struct edge_block* d_edge_preallocate_list, 
 
     __syncthreads();
 
+    // printf("K1 counter = %u\n", atomicAdd((unsigned *)&k1counter, 1));
+
     if(id < vertex_size) {
+
+        printf("Prefix sum of %ld is %ld\n", id, d_prefix_sum_edge_blocks[id]);
 
         unsigned long current_vertex = id + 1;
         unsigned long index = 0;
@@ -398,24 +710,38 @@ __global__ void adjacency_list_init(struct edge_block* d_edge_preallocate_list, 
         // temporary fix, this can't be a constant sized one
         struct edge_block *device_edge_block[100];
 
+        // device_edge_block[0] = parallel_pop_from_edge_preallocate_queue( total_edge_blocks_count_init, d_prefix_sum_edge_blocks, id);
 
-        do {
+	    // atomicInc((unsigned *)&k1counter, 112);
+        // printf("K1 counter = %u\n", atomicAdd((unsigned *)&k1counter, 1));
+        // __syncthreads();
+        // printf("K1 counter = %u\n", k1counter);
 
-            current = atomicCAS(&lockvar, 0, 1);
 
-            if(current == 0) {
+        // for(unsigned long i = 0 ; i < edge_blocks_required ; i++) {
+        parallel_pop_from_edge_preallocate_queue( device_edge_block, total_edge_blocks_count_init, d_prefix_sum_edge_blocks, id, thread_blocks);
+        //     // printf("ID = %lu in edge CS\n", id);
+        // }
+
+        // __syncthreads();
+
+        // do {
+
+        //     current = atomicCAS(&lockvar, 0, 1);
+
+        //     if(current == 0) {
             
-                for(unsigned long i = 0 ; i < edge_blocks_required ; i++) {
-                    device_edge_block[i] = pop_from_edge_preallocate_queue(1);
-                    printf("ID = %lu in edge CS\n", id);
-                }
+        //         for(unsigned long i = 0 ; i < edge_blocks_required ; i++) {
+        //             device_edge_block[i] = pop_from_edge_preallocate_queue(1);
+        //             printf("ID = %lu in edge CS\n", id);
+        //         }
             
-                lockvar = 0;
+        //         lockvar = 0;
 
                 
-            }
+        //     }
 
-        } while(current != 0);
+        // } while(current != 0);
 
         // critical section end
         if(threadIdx.x == 0)
@@ -461,7 +787,7 @@ __global__ void adjacency_list_init(struct edge_block* d_edge_preallocate_list, 
 
                 if(d_source[i] == current_vertex){
 
-                    printf("Source = %lu and Destination = %lu\n", d_source[i], d_destination[i]);
+                    // printf("Source = %lu and Destination = %lu\n", d_source[i], d_destination[i]);
 
                     // insert here
                     curr->edge_block_entry[edge_block_entry_count].destination_vertex = d_destination[i];
@@ -481,6 +807,27 @@ __global__ void adjacency_list_init(struct edge_block* d_edge_preallocate_list, 
         }
 
     }
+
+}
+
+__global__ void update_edge_queue(unsigned long pop_count) {
+
+
+    d_e_queue.count -= pop_count;
+
+    printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+    
+    if((d_e_queue.front + pop_count - 1) % EDGE_PREALLOCATE_LIST_SIZE == d_e_queue.rear) {
+
+        d_e_queue.front = -1;
+        d_e_queue.rear = -1;
+
+    }
+    else
+        d_e_queue.front = (d_e_queue.front + pop_count) % EDGE_PREALLOCATE_LIST_SIZE;
+
+    printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+
 
 }
 
@@ -520,7 +867,7 @@ __global__ void printKernel(struct vertex_block* d_vertex_preallocate_list, unsi
                 }
                 printf("\n");            
             
-            }printf("\n");
+            }
 
 
         }
@@ -532,6 +879,7 @@ __global__ void printKernel(struct vertex_block* d_vertex_preallocate_list, unsi
     }
 
     printf("VDS = %lu\n", d_v_d_sentinel.vertex_count);
+    printf("K2 counter = %u\n", k2counter);
 
 }
 
@@ -641,6 +989,7 @@ int main(void) {
     thrust::host_vector <unsigned long> h_source(1);
     thrust::host_vector <unsigned long> h_destination(1);
     thrust::host_vector <unsigned long> h_source_degree(1);
+    thrust::host_vector <unsigned long> h_prefix_sum_edge_blocks(1);
 
     // reading file, after function call h_source has data on source vertex and h_destination on destination vertex
     // both represent the edge data on host
@@ -650,6 +999,7 @@ int main(void) {
     unsigned long edge_size = h_graph_prop->total_edges;
 
     h_source_degree.resize(h_graph_prop->xDim);
+    h_prefix_sum_edge_blocks.resize(h_graph_prop->xDim);
     thrust::fill(h_source_degree.begin(), h_source_degree.end(), 0);
 
     std::cout << "Check, " << h_source.size() << " and " << h_destination.size() << std::endl;
@@ -671,6 +1021,9 @@ int main(void) {
             zero_count++;
     }
     printf("zero count is %lu\n", zero_count);
+
+
+    
 
     // sleep(5);
 
@@ -759,6 +1112,16 @@ int main(void) {
     printf("Total edge blocks needed = %lu\n", total_edge_blocks_count_init);
     // sleep(5);
 
+    h_prefix_sum_edge_blocks[0] = h_edge_blocks_count_init[0];
+    printf("Prefix sum array\n%ld ", h_prefix_sum_edge_blocks[0]);
+    for(unsigned long i = 1 ; i < h_graph_prop->xDim ; i++) {
+
+        h_prefix_sum_edge_blocks[i] += h_prefix_sum_edge_blocks[i-1] + h_edge_blocks_count_init[i];
+        printf("%ld ", h_prefix_sum_edge_blocks[i]);
+
+    }
+    printf("\n");
+
     struct edge_block *device_edge_block;
     cudaMalloc((struct edge_block**)&device_edge_block, total_edge_blocks_count_init * sizeof(struct edge_block));
 
@@ -768,6 +1131,7 @@ int main(void) {
     thrust::device_vector <unsigned long> d_source(h_graph_prop->total_edges);
     thrust::device_vector <unsigned long> d_destination(h_graph_prop->total_edges);
     thrust::device_vector <unsigned long> d_edge_blocks_count_init(h_graph_prop->xDim);
+    thrust::device_vector <unsigned long> d_prefix_sum_edge_blocks(h_graph_prop->xDim);
   
     thrust::copy(h_vertex_preallocate_list.begin(), h_vertex_preallocate_list.end(), d_vertex_preallocate_list.begin());
     thrust::copy(h_edge_preallocate_list.begin(), h_edge_preallocate_list.end(), d_edge_preallocate_list.begin());
@@ -775,39 +1139,61 @@ int main(void) {
     thrust::copy(h_source.begin(), h_source.end(), d_source.begin());
     thrust::copy(h_destination.begin(), h_destination.end(), d_destination.begin());
     thrust::copy(h_edge_blocks_count_init.begin(), h_edge_blocks_count_init.end(), d_edge_blocks_count_init.begin());
- 
+    thrust::copy(h_prefix_sum_edge_blocks.begin(), h_prefix_sum_edge_blocks.end(), d_prefix_sum_edge_blocks.begin());
+
     struct vertex_block** dvpl = thrust::raw_pointer_cast(d_vertex_preallocate_list.data());
     struct edge_block** depl = thrust::raw_pointer_cast(d_edge_preallocate_list.data());
     struct adjacency_sentinel** dapl = thrust::raw_pointer_cast(d_adjacency_sentinel_list.data());
     unsigned long* source = thrust::raw_pointer_cast(d_source.data());
     unsigned long* destination = thrust::raw_pointer_cast(d_destination.data());
     unsigned long* ebci = thrust::raw_pointer_cast(d_edge_blocks_count_init.data());
+    unsigned long* pseb = thrust::raw_pointer_cast(d_prefix_sum_edge_blocks.data());
 
 
 
     printf("GPU side\n");
-    // push_preallocate_list_to_device_queue_kernel<<< 1, 1>>>(dvpl, depl, dapl, vertex_blocks_count_init, ebci, total_edge_blocks_count_init);
-    push_preallocate_list_to_device_queue_kernel<<< 1, 1>>>(device_vertex_block, device_edge_block, dapl, vertex_blocks_count_init, ebci, total_edge_blocks_count_init);
+
+    unsigned long thread_blocks;
+
+
+    // Parallelize this
+    // push_preallocate_list_to_device_queue_kernel<<< 1, 1>>>(device_vertex_block, device_edge_block, dapl, vertex_blocks_count_init, ebci, total_edge_blocks_count_init);
+    
+    thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);    
+
+    data_structure_init<<< 1, 1>>>();
+    parallel_push_vertex_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_vertex_block, dapl, vertex_blocks_count_init);
+
+    thread_blocks = ceil(double(total_edge_blocks_count_init) / THREADS_PER_BLOCK);
+
+    parallel_push_edge_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, dapl, ebci, total_edge_blocks_count_init);
+
+    parallel_push_queue_update<<< 1, 1>>>(vertex_blocks_count_init, total_edge_blocks_count_init);
     cudaDeviceSynchronize();
 
     // sleep(5);
 
     // Pass raw array and its size to kernel
-    unsigned long thread_blocks;
-    thread_blocks = ceil(double(vertex_blocks_count_init) / 1024);
+    thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);
     std::cout << "Thread blocks vertex init = " << thread_blocks << std::endl;
-    // vertex_dictionary_init<<< thread_blocks, 1024>>>(dvpl, dapl, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
-    vertex_dictionary_init<<< thread_blocks, 1024>>>(device_vertex_block, device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
+    // vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(dvpl, dapl, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
+    vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_vertex_block, device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
 
-    thread_blocks = ceil(double(h_graph_prop->xDim) / 1024);
+    cudaDeviceSynchronize();
+
+    thread_blocks = ceil(double(h_graph_prop->xDim) / THREADS_PER_BLOCK);
     std::cout << "Thread blocks edge init = " << thread_blocks << std::endl;
 
     // sleep(5);
 
-    // adjacency_list_init<<< thread_blocks, 1024>>>(depl, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size);
-    adjacency_list_init<<< thread_blocks, 1024>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size);
+    // adjacency_list_init<<< thread_blocks, THREADS_PER_BLOCK>>>(depl, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size);
+    adjacency_list_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, thread_blocks);
+    // Seperate kernel for updating queues due to performance issues for global barriers
+    update_edge_queue<<< 1, 1>>>(total_edge_blocks_count_init);
 
     cudaDeviceSynchronize();
+
+    // sleep(5);
 
     printKernel<<< 1, 1>>>(device_vertex_block, vertex_size);
     cudaDeviceSynchronize();
