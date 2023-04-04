@@ -16,10 +16,11 @@
 #include <thrust/execution_policy.h>
 
 #define THREADS_PER_BLOCK 1024
-#define VERTEX_BLOCK_SIZE 150000
-#define EDGE_BLOCK_SIZE 10
+#define VERTEX_BLOCK_SIZE 17000000
+#define EDGE_BLOCK_SIZE 15
 #define VERTEX_PREALLOCATE_LIST_SIZE 2000
-#define EDGE_PREALLOCATE_LIST_SIZE 1500000
+#define EDGE_PREALLOCATE_LIST_SIZE 26000000
+#define BATCH_SIZE 1000000
 
 // Issues faced
 // Too big of an edge_preallocate_list giving errors
@@ -90,7 +91,8 @@ struct adjacency_sentinel_new {
     unsigned long last_insert_edge_offset;
 
     struct edge_block *last_insert_edge_block;
-    struct edge_block *edge_block_address[100];
+    // struct edge_block *edge_block_address[100];
+    struct edge_block *edge_block_address;
 
 };
 
@@ -293,7 +295,12 @@ __device__ void parallel_pop_from_edge_preallocate_queue(struct edge_block** dev
 
     else {
 
-        unsigned long start_index = d_prefix_sum_edge_blocks[id - 1];
+        unsigned long start_index;
+        if(id == 0)
+            start_index = 0;
+        else
+            start_index = d_prefix_sum_edge_blocks[id - 1];
+
         unsigned long end_index = d_prefix_sum_edge_blocks[id];
         unsigned long j = 0;
 
@@ -301,10 +308,16 @@ __device__ void parallel_pop_from_edge_preallocate_queue(struct edge_block** dev
 
             device_edge_block[j] = d_e_queue.edge_block_address[d_e_queue.front + i];
             d_e_queue.edge_block_address[d_e_queue.front + i] = NULL;
+
             // printf("Popped %p from the edge queue, placeholders front = %ld, rear = %ld\n", device_edge_block[j], d_e_queue.front, d_e_queue.rear);
 
             j++;
         }
+
+        // if(id == 0) {
+        //     printf("Popped %p from the edge queue, start_index = %ld, end_index = %ld\n", device_edge_block[j-1], start_index, end_index);
+        //     // printf("Queue address = %p, index is %lu\n", d_e_queue.edge_block_address[0], d_e_queue.front + start_index);
+        // }
 
     }
 
@@ -362,6 +375,7 @@ __global__ void data_structure_init(struct vertex_dictionary_structure *device_v
     d_e_queue.count = 0;
 
     device_vertex_dictionary->active_vertex_count = 0;
+    // printf("At data structure init \n");
     // d_search_flag = 0;
 
 }
@@ -419,7 +433,7 @@ __global__ void parallel_push_edge_preallocate_list_to_device_queue(struct edge_
 
 }
 
-__global__ void parallel_push_edge_preallocate_list_to_device_queue_v1(struct edge_block* d_edge_preallocate_list, struct adjacency_sentinel_new** d_adjacency_sentinel_list, unsigned long *edge_blocks_count_init, unsigned long total_edge_blocks_count_init) {
+__global__ void parallel_push_edge_preallocate_list_to_device_queue_v1(struct edge_block* d_edge_preallocate_list, unsigned long *edge_blocks_count_init, unsigned long total_edge_blocks_count_init) {
 
     unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -440,19 +454,22 @@ __global__ void parallel_push_edge_preallocate_list_to_device_queue_v1(struct ed
 
         d_e_queue.edge_block_address[id] = d_edge_preallocate_list + id;
 
-
+        // if(id == 0) {
+        //     printf("%lu -> %p\n", id, d_edge_preallocate_list + id);
+        //     printf("Queue is %p\n", d_e_queue.edge_block_address[0]);
+        // }
     }
 
 }
 
-__global__ void parallel_push_queue_update(unsigned long vertex_blocks_count_init, unsigned long total_edge_blocks_count_init) {
+__global__ void parallel_push_queue_update(unsigned long total_edge_blocks_count_init) {
 
-    if (d_v_queue.front == -1)
-        d_v_queue.front = 0;
+    // if (d_v_queue.front == -1)
+    //     d_v_queue.front = 0;
 
-    d_v_queue.rear = (d_v_queue.rear + vertex_blocks_count_init) % VERTEX_PREALLOCATE_LIST_SIZE;
-    // d_v_queue.vertex_block_address[d_v_queue.rear] = device_vertex_block;
-    d_v_queue.count += vertex_blocks_count_init;
+    // d_v_queue.rear = (d_v_queue.rear + vertex_blocks_count_init) % VERTEX_PREALLOCATE_LIST_SIZE;
+    // // d_v_queue.vertex_block_address[d_v_queue.rear] = device_vertex_block;
+    // d_v_queue.count += vertex_blocks_count_init;
 
     if (d_e_queue.front == -1)
         d_e_queue.front = 0;
@@ -556,7 +573,7 @@ __global__ void parallel_push_queue_update(unsigned long vertex_blocks_count_ini
 
 // }
 
-__global__ void parallel_vertex_dictionary_init_v1(struct adjacency_sentinel_new* d_adjacency_sentinel_list, unsigned long vertex_blocks_count_init, struct graph_properties *d_graph_prop, unsigned long vertex_size, unsigned long *edge_blocks_count_init, struct vertex_dictionary_structure *device_vertex_dictionary) {
+__global__ void parallel_vertex_dictionary_init_v1(struct adjacency_sentinel_new* d_adjacency_sentinel_list, unsigned long vertex_size, unsigned long *edge_blocks_count_init, struct vertex_dictionary_structure *device_vertex_dictionary) {
 	
     unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -923,7 +940,7 @@ __device__ unsigned int lockvar = 0;
 
 // }
 
-__global__ void adjacency_list_init_modded_v2(struct edge_block* d_edge_preallocate_list, unsigned long *d_edge_blocks_count_init, struct graph_properties *d_graph_prop, unsigned long *d_source, unsigned long *d_destination, unsigned long total_edge_blocks_count_init, unsigned long vertex_size, unsigned long edge_size, unsigned long *d_prefix_sum_edge_blocks, unsigned long *d_prefix_sum_vertex_degrees, unsigned long thread_blocks, struct vertex_dictionary_structure *device_vertex_dictionary) {
+__global__ void adjacency_list_init_modded_v2(struct edge_block* d_edge_preallocate_list, unsigned long *d_edge_blocks_count_init, unsigned long *d_source, unsigned long *d_destination, unsigned long total_edge_blocks_count_init, unsigned long vertex_size, unsigned long edge_size, unsigned long *d_prefix_sum_edge_blocks, unsigned long *d_prefix_sum_vertex_degrees, unsigned long thread_blocks, struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long batch_number, unsigned long batch_size) {
 	
     unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -945,20 +962,27 @@ __global__ void adjacency_list_init_modded_v2(struct edge_block* d_edge_prealloc
 
         // critical section start
 
-        // temporary fix, this can't be a constant sized one
-        struct edge_block *device_edge_block[100];
+        struct edge_block *device_edge_block_base;
 
-
-
-
-        // for(unsigned long i = 0 ; i < edge_blocks_required ; i++) {
-        parallel_pop_from_edge_preallocate_queue( device_edge_block, total_edge_blocks_count_init, d_prefix_sum_edge_blocks, id, thread_blocks);
-
+        if(batch_number == 0) {
+            // temporary fix, this can't be a constant sized one
+            // for(unsigned long i = 0 ; i < edge_blocks_required ; i++) {
+            struct edge_block *device_edge_block[4];
+            parallel_pop_from_edge_preallocate_queue( device_edge_block, total_edge_blocks_count_init, d_prefix_sum_edge_blocks, id, thread_blocks);
+            device_edge_block_base = device_edge_block[0];
+        }
 
         // critical section end
         // if(threadIdx.x == 0)
         //     printf("ID\tIteration\tGPU address\n");
         
+        // if(id == 0) {
+
+        //     for(unsigned long i = 0 ; i < batch_size ; i++)
+        //         printf("%lu and %lu\n", d_source[i], d_destination[i]);
+
+        // }
+
         // for(unsigned long i = 0 ; i < edge_blocks_required ; i++)
         //     printf("%lu\t%lu\t\t%p\n", id, i, device_edge_block[i]);
 
@@ -992,11 +1016,36 @@ __global__ void adjacency_list_init_modded_v2(struct edge_block* d_edge_prealloc
             //     curr->next = NULL;
             // }
 
-            unsigned long edge_block_entry_count = 0;
-            unsigned long edge_block_counter = 0;
+            // unsigned long edge_block_entry_count = 0;
+            // unsigned long edge_block_counter = 0;
+            unsigned long edge_block_entry_count;
+            unsigned long edge_block_counter;
+
+            if(batch_number == 0) {
+
+                edge_block_entry_count = 0;
+                edge_block_counter = 0;
+                vertex_adjacency->active_edge_count = 0;
+
+                // curr = device_edge_block[edge_block_counter];
+                curr = device_edge_block_base;
+                // vertex_adjacency->edge_block_address[edge_block_counter] = curr;
+                vertex_adjacency->edge_block_address = curr;
+                vertex_adjacency->last_insert_edge_block = curr;
+
+            }
+
+            else {
+
+                edge_block_entry_count = vertex_adjacency->last_insert_edge_offset;
+                edge_block_counter = vertex_adjacency->edge_block_count;
+                curr = vertex_adjacency->last_insert_edge_block;
+                curr->active_edge_count = 0;
+                
+
+            }
 
             // curr = vertex_adjacency->next;
-            vertex_adjacency->active_edge_count = 0;
 
             unsigned long start_index;
 
@@ -1010,37 +1059,70 @@ __global__ void adjacency_list_init_modded_v2(struct edge_block* d_edge_prealloc
             // printf("Current vertex = %lu, start = %lu, end = %lu\n", current_vertex, start_index, end_index);
 
             // unsigned long current_edge_block = 0;
-            curr = device_edge_block[edge_block_counter];
-            vertex_adjacency->edge_block_address[edge_block_counter] = curr;
+            // curr = device_edge_block[edge_block_counter];
+            // // vertex_adjacency->edge_block_address[edge_block_counter] = curr;
+            // vertex_adjacency->edge_block_address = curr;
+            // vertex_adjacency->last_insert_edge_block = curr;
 
             // __syncthreads();
 
-            if(id == 0)
-                printf("Checkpoint AL beg\n");
+            // if(id == 0)
+            //     printf("Checkpoint AL beg\n");
+
+            // unsigned long edge_counter = 0;
+
+            // if(id == 0) {
+            //     // printf("Edge counter is %lu\n", vertex_adjacency->active_edge_count);
+            //     printf("Start index is %lu and end index is %lu\n", start_index, end_index);
+            //     printf("Device edge block address is %p\n", curr);
+            // }
 
             for(unsigned long i = start_index ; i < end_index ; i++) {
 
+                // printf("Checkpoint 0\n");
+
                 // if(d_source[i] == current_vertex){
 
-                    // printf("Source = %lu and Destination = %lu\n", d_source[i], d_destination[i]);
+                // printf("Thread = %lu and Source = %lu and Destination = %lu\n", id, d_source[i], d_destination[i]);
+                // printf("Checkpoint 1\n");
 
-                    // insert here
-                    curr->edge_block_entry[edge_block_entry_count].destination_vertex = d_destination[i];
-                    vertex_adjacency->active_edge_count++;
-                    
-                    if(++edge_block_entry_count >= EDGE_BLOCK_SIZE) {
+                // insert here
 
-                        // curr = curr->next;
-                        // edge_block_counter++;
-                        edge_block_entry_count = 0;
-                        curr = device_edge_block[++edge_block_counter];
-                        vertex_adjacency->edge_block_address[edge_block_counter] = curr;
+                // if(curr == NULL)
+                //     printf("Hit here at %lu\n", id);
 
-                    }
+                curr->edge_block_entry[edge_block_entry_count].destination_vertex = d_destination[i];                    
+                // printf("Checkpoint 2\n");
+                
+                // if(id == 0) {
+                //     printf("Entry is %lu\n", curr->edge_block_entry[edge_block_entry_count].destination_vertex);
+                // }
+                // printf("Entry is %lu\n", curr->edge_block_entry[edge_block_entry_count].destination_vertex);
+                vertex_adjacency->active_edge_count++;
+                curr->active_edge_count++;
+                vertex_adjacency->last_insert_edge_offset++;
+                // printf("Checkpoint 3\n");
+
+                if(++edge_block_entry_count >= EDGE_BLOCK_SIZE) {
+
+                    // curr = curr->next;
+                    // edge_block_counter++;
+                    edge_block_entry_count = 0;
+                    curr = curr + 1;
+                    // curr = device_edge_block[++edge_block_counter];
+                    curr->active_edge_count = 0;
+                    vertex_adjacency->last_insert_edge_block = curr;
+                    vertex_adjacency->edge_block_count++;
+                    vertex_adjacency->last_insert_edge_offset = 0;
+                    // vertex_adjacency->edge_block_address[edge_block_counter] = curr;
+
+                }
 
                 // }
 
             }
+
+            // printf("Success\n");
 
         }
 
@@ -1058,7 +1140,7 @@ __global__ void update_edge_queue(unsigned long pop_count) {
 
     d_e_queue.count -= pop_count;
 
-    printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+    // printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
     
     if((d_e_queue.front + pop_count - 1) % EDGE_PREALLOCATE_LIST_SIZE == d_e_queue.rear) {
 
@@ -1069,7 +1151,7 @@ __global__ void update_edge_queue(unsigned long pop_count) {
     else
         d_e_queue.front = (d_e_queue.front + pop_count) % EDGE_PREALLOCATE_LIST_SIZE;
 
-    printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
+    // printf("Edge Queue before, front = %ld, rear = %ld\n", d_e_queue.front, d_e_queue.rear);
 
 
 }
@@ -1087,14 +1169,123 @@ __global__ void search_edge_kernel(struct vertex_dictionary_structure *device_ve
 
         struct adjacency_sentinel_new *edge_sentinel = device_vertex_dictionary->vertex_adjacency[search_source - 1];
         unsigned long extracted_value;
-        extracted_value = edge_sentinel->edge_block_address[edge_block]->edge_block_entry[edge_block_entry].destination_vertex;
+
+        struct edge_block *itr = edge_sentinel->edge_block_address + (edge_block);
+        extracted_value = itr->edge_block_entry[edge_block_entry].destination_vertex;
+
+        // extracted_value = edge_sentinel->edge_block_address[edge_block]->edge_block_entry[edge_block_entry].destination_vertex;
 
         if(extracted_value == search_destination) {
             *d_search_flag = 1;
-            printf("Edge exists\n");
+            // printf("Edge exists\n");
         }
 
     }
+
+}
+
+__global__ void correctness_check_kernel(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long edge_size, unsigned long *d_c_source, unsigned long *d_c_destination) {
+
+    printf("\nCorrectness check of data structure\n");
+    printf("*---------------*\n");
+
+    unsigned long existsFlag = 0;
+
+    // for(unsigned long i = 0 ; i < edge_size ; i++)
+    //     printf("%lu and %lu\n", d_c_source[i], d_c_destination[i]);
+    
+    // printf("*-------------*\n");
+
+    for(unsigned long i = 0 ; i < edge_size ; i++) {
+
+        unsigned long curr_source = d_c_source[i];
+        unsigned long curr_destination = d_c_destination[i];
+
+        // printf("%lu and %lu\n", curr_source, curr_destination);
+
+        existsFlag = 0;
+
+        // here checking at curr_source - 1, since source vertex 10 would be stored at index 9
+        if((device_vertex_dictionary->vertex_adjacency[curr_source - 1] != NULL) && (device_vertex_dictionary->vertex_id[curr_source - 1] != 0)) {
+            // printf("%lu -> , edge blocks = %lu, edge sentinel = %p, active edge count = %lu, destination vertices -> ", device_vertex_dictionary->vertex_id[i], device_vertex_dictionary->edge_block_count[i], device_vertex_dictionary->vertex_adjacency[i], device_vertex_dictionary->vertex_adjacency[i]->active_edge_count);
+
+            unsigned long edge_block_counter = 0;
+            unsigned long edge_block_entry_count = 0;
+            // struct edge_block *itr = device_vertex_dictionary->vertex_adjacency[curr_source - 1]->edge_block_address[edge_block_counter];
+            struct edge_block *itr = device_vertex_dictionary->vertex_adjacency[curr_source - 1]->edge_block_address + (edge_block_counter);
+
+            for(unsigned long j = 0 ; j < device_vertex_dictionary->vertex_adjacency[curr_source - 1]->active_edge_count ; j++) {
+                            
+                // printf("%lu ", itr->edge_block_entry[edge_block_entry_count].destination_vertex);
+            
+                // edge_block_entry_count++;
+
+                if(itr->edge_block_entry[edge_block_entry_count].destination_vertex == curr_destination) {
+                    existsFlag = 1;
+                    // printf("Found %lu and %lu\n", curr_source, curr_destination);
+                    break;
+                }
+
+                if(++edge_block_entry_count >= EDGE_BLOCK_SIZE) {
+                    // itr = itr->next;
+                    // itr = device_vertex_dictionary->vertex_adjacency[curr_source - 1]->edge_block_address[++edge_block_counter];
+                    itr = device_vertex_dictionary->vertex_adjacency[curr_source - 1]->edge_block_address + (++edge_block_counter);
+                    edge_block_entry_count = 0;
+                }
+            }
+
+            if(!existsFlag)
+                break;
+
+            // printf("\n");    
+
+        }
+
+    }
+
+    if(!existsFlag)
+        printf("Data structure corrupted\n");
+    else
+        printf("Data structure uncorrupted\n");
+
+    printf("*---------------*\n\n");
+
+    // printf("Printing Linked List\n");
+
+    // struct vertex_block *ptr = d_v_d_sentinel.next;
+
+    // unsigned long vertex_block = 0;
+
+    // for(unsigned long i = 0 ; i < device_vertex_dictionary->active_vertex_count ; i++) {
+
+    //     // printf("Checkpoint\n");
+
+    //     if((device_vertex_dictionary->vertex_adjacency[i] != NULL) && (device_vertex_dictionary->vertex_id[i] != 0)) {
+    //         printf("%lu -> , edge blocks = %lu, edge sentinel = %p, active edge count = %lu, destination vertices -> ", device_vertex_dictionary->vertex_id[i], device_vertex_dictionary->edge_block_count[i], device_vertex_dictionary->vertex_adjacency[i], device_vertex_dictionary->vertex_adjacency[i]->active_edge_count);
+
+    //         unsigned long edge_block_counter = 0;
+    //         unsigned long edge_block_entry_count = 0;
+    //         struct edge_block *itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address[edge_block_counter];
+
+    //         for(unsigned long j = 0 ; j < device_vertex_dictionary->vertex_adjacency[i]->active_edge_count ; j++) {
+                            
+    //             printf("%lu ", itr->edge_block_entry[edge_block_entry_count].destination_vertex);
+            
+    //             // edge_block_entry_count++;
+
+    //             if(++edge_block_entry_count >= EDGE_BLOCK_SIZE) {
+    //                 // itr = itr->next;
+    //                 itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address[++edge_block_counter];
+    //                 edge_block_entry_count = 0;
+    //             }
+    //         }
+    //         printf("\n");            
+    
+    //     }
+
+
+
+    // }
 
 }
 
@@ -1210,7 +1401,8 @@ __global__ void printKernelmodded_v1(struct vertex_dictionary_structure *device_
 
             unsigned long edge_block_counter = 0;
             unsigned long edge_block_entry_count = 0;
-            struct edge_block *itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address[edge_block_counter];
+            // struct edge_block *itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address[edge_block_counter];
+            struct edge_block *itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address;
 
             for(unsigned long j = 0 ; j < device_vertex_dictionary->vertex_adjacency[i]->active_edge_count ; j++) {
                             
@@ -1220,7 +1412,8 @@ __global__ void printKernelmodded_v1(struct vertex_dictionary_structure *device_
 
                 if(++edge_block_entry_count >= EDGE_BLOCK_SIZE) {
                     // itr = itr->next;
-                    itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address[++edge_block_counter];
+                    // itr = device_vertex_dictionary->vertex_adjacency[i]->edge_block_address[++edge_block_counter];
+                    itr = itr + 1;
                     edge_block_entry_count = 0;
                 }
             }
@@ -1338,19 +1531,56 @@ void readFile(char *fileLoc, struct graph_properties *h_graph_prop, thrust::host
 
 }
 
+void memory_usage() {
+
+    // show memory usage of GPU
+
+    size_t free_byte ;
+
+    size_t total_byte ;
+
+    cudaMemGetInfo( &free_byte, &total_byte ) ;
+    // cuda_status = cudaMemGetInfo( &free_byte, &total_byte ) ;
+
+    // if ( cudaSuccess != cuda_status ){
+
+    //     printf("Error: cudaMemGetInfo fails, %s \n", cudaGetErrorString(cuda_status) );
+
+    //     exit(1);
+
+    // }
+
+    double free_db = (double)free_byte ;
+
+    double total_db = (double)total_byte ;
+
+    double used_db = total_db - free_db ;
+
+    printf("GPU memory usage: used = %f, free = %f MB, total = %f MB\n",
+
+        used_db/1024.0/1024.0, free_db/1024.0/1024.0, total_db/1024.0/1024.0);
+
+}
+
 int main(void) {
 
     // char fileLoc[20] = "input.mtx";
     // char fileLoc[30] = "inf-luxembourg_osm.mtx";
     // char fileLoc[30] = "rgg_n_2_16_s0.mtx";
-    char fileLoc[30] = "delaunay_n17.mtx";
+    // char fileLoc[30] = "delaunay_n17.mtx";
     // char fileLoc[30] = "fe-ocean.mtx";
     // char fileLoc[30] = "kron_g500-logn16.mtx";
+    // char fileLoc[30] = "kron_g500-logn21.mtx";
+    // char fileLoc[30] = "delaunay_n23.mtx";
+    // char fileLoc[30] = "delaunay_n24.mtx";
+    // char fileLoc[30] = "inf-europe_osm.mtx";
+    // char fileLoc[30] = "rgg_n_2_23_s0.mtx";
+    char fileLoc[30] = "rgg_n_2_24_s0.mtx";
 
     // some random inits
     unsigned long choice = 1;
-    printf("Please enter structure of edge blocks\n1. Unsorted\n2. Sorted\n");
-    scanf("%lu", &choice);
+    // printf("Please enter structure of edge blocks\n1. Unsorted\n2. Sorted\n");
+    // scanf("%lu", &choice);
 
     clock_t section1, section2, section2a, section3, search_times;
 
@@ -1360,6 +1590,7 @@ int main(void) {
     thrust::host_vector <unsigned long> h_source_degree(1);
     thrust::host_vector <unsigned long> h_prefix_sum_vertex_degrees(1);
     thrust::host_vector <unsigned long> h_prefix_sum_edge_blocks(1);
+    thrust::host_vector <unsigned long> h_edge_blocks_count_init(1);
 
     // reading file, after function call h_source has data on source vertex and h_destination on destination vertex
     // both represent the edge data on host
@@ -1367,19 +1598,40 @@ int main(void) {
     readFile(fileLoc, h_graph_prop, h_source, h_destination);
     section1 = clock() - section1;
 
+    // below device vectors are for correctness check of the data structure at the end
+    thrust::device_vector <unsigned long> d_c_source(h_graph_prop->total_edges);
+    thrust::device_vector <unsigned long> d_c_destination(h_graph_prop->total_edges);
+    thrust::copy(h_source.begin(), h_source.end(), d_c_source.begin());
+    thrust::copy(h_destination.begin(), h_destination.end(), d_c_destination.begin());
+    unsigned long* c_source = thrust::raw_pointer_cast(d_c_source.data());
+    unsigned long* c_destination = thrust::raw_pointer_cast(d_c_destination.data());
+
     unsigned long vertex_size = h_graph_prop->xDim;
     unsigned long edge_size = h_graph_prop->total_edges;
 
-    h_source_degree.resize(h_graph_prop->xDim);
+    unsigned long batch_size = BATCH_SIZE;
+    unsigned long total_batches = ceil(double(edge_size) / batch_size);
+    // unsigned long batch_number = 0;
+
+    std::cout << "Batches required is " << total_batches << std::endl;
+
+    h_source_degree.resize(vertex_size);
     h_prefix_sum_vertex_degrees.resize(vertex_size);
-    h_prefix_sum_edge_blocks.resize(h_graph_prop->xDim);
+    h_prefix_sum_edge_blocks.resize(vertex_size);
+    h_edge_blocks_count_init.resize(vertex_size);
+    
     thrust::fill(h_source_degree.begin(), h_source_degree.end(), 0);
 
     // std::cout << "Check, " << h_source.size() << " and " << h_destination.size() << std::endl;
 
     // sleep(5);
 
-    section2 = clock();
+    struct vertex_dictionary_structure *device_vertex_dictionary;
+    cudaMalloc(&device_vertex_dictionary, sizeof(struct vertex_dictionary_structure));
+    struct adjacency_sentinel_new *device_adjacency_sentinel;
+    cudaMalloc((struct adjacency_sentinel_new**)&device_adjacency_sentinel, vertex_size * sizeof(struct adjacency_sentinel_new));
+
+    // below till cudaMalloc is temp code
 
     for(unsigned long i = 0 ; i < h_graph_prop->total_edges ; i++) {
      
@@ -1388,159 +1640,14 @@ int main(void) {
     
     }
 
-    section2 = clock() - section2;
+    // h_prefix_sum_vertex_degrees[0] = h_source_degree[0];
+    // // printf("Prefix sum array vertex degrees\n%ld ", h_prefix_sum_vertex_degrees[0]);
+    // for(unsigned long i = 1 ; i < h_graph_prop->xDim ; i++) {
 
-    // std::cout << std::endl << "After sorting" << std::endl << std::endl;
-
-    // sort test start
-
-    section2a = clock();
-
-    unsigned long* h_source_ptr = thrust::raw_pointer_cast(h_source.data());
-    unsigned long* h_destination_ptr = thrust::raw_pointer_cast(h_destination.data());
-    // thrust::sort_by_key(thrust::host, thrust::host_ptr<unsigned long> (h_source), thrust::host_ptr<unsigned long> (h_source + edge_size), thrust::host_ptr<unsigned long> (h_destination));
-    thrust::sort_by_key(thrust::host, thrust::raw_pointer_cast(h_source.data()), thrust::raw_pointer_cast(h_source.data()) + edge_size, thrust::raw_pointer_cast(h_destination.data()));
-
-
-
-    if(choice == 2) {
-
-        unsigned long current = h_source[0];
-        unsigned long start_index = 0, end_index = 0;
-        for(unsigned long i = 0 ; i < 25 ; i++) {
-
-            if((current != h_source[i])) {
-
-                // std::cout << "start_index is " << start_index << " and end_index is " << end_index << std::endl;
-                thrust::sort_by_key(thrust::host, h_destination_ptr + start_index, h_destination_ptr + end_index, h_source_ptr + start_index);
-                start_index = end_index;
-                current = h_source[i];
-
-            }
-            
-            end_index++;
-
-        }
-
-        // std::cout << "start_index is " << start_index << " and end_index is " << end_index << std::endl;
-        thrust::sort_by_key(thrust::host, h_destination_ptr + start_index, h_destination_ptr + end_index, h_source_ptr + start_index);
-
-    }
-
-    section2a = clock() - section2a;
-
-    // after sort
-    // for(unsigned long i = 0 ; i < h_graph_prop->total_edges ; i++) {
-     
-    //     printf("%lu and %lu\n", h_source[i], h_destination[i]);
-    //     // h_source_degree[h_source[i] - 1]++;
-    
-    // }
-    // printf("After final sort\n");
-
-    // for(unsigned long i = 0 ; i < h_graph_prop->total_edges ; i++) {
-     
-    //     printf("%lu and %lu\n", h_source[i], h_destination[i]);
-    //     // h_source_degree[h_source[i] - 1]++;
-    
-    // }    
-
-    // sort test end
-
-    section3 = clock();
-
-    unsigned long zero_count = 0;
-    // std::cout << "Printing degree of each source vertex" << std::endl;
-    for(unsigned long i = 0 ; i < h_graph_prop->xDim ; i++) {
-        // printf("%lu ", h_source_degree[i]);
-        if(h_source_degree[i] == 0)
-            zero_count++;
-    }
-    // sleep(15);
-    printf("zero count is %lu\n", zero_count);
-
-    h_prefix_sum_vertex_degrees[0] = h_source_degree[0];
-    // printf("Prefix sum array vertex degrees\n%ld ", h_prefix_sum_vertex_degrees[0]);
-    for(unsigned long i = 1 ; i < h_graph_prop->xDim ; i++) {
-
-        h_prefix_sum_vertex_degrees[i] += h_prefix_sum_vertex_degrees[i-1] + h_source_degree[i];
-        // printf("%ld ", h_prefix_sum_vertex_degrees[i]);
-
-    }
-    // printf("\n");
-    
-
-    // sleep(5);
-
-    thrust::host_vector <unsigned long> ::iterator iter = thrust::max_element(h_source.begin(), h_source.end());
-
-    // printf("xDim = %lu, yDim = %lu, Total Edges = %lu\n", h_graph_prop -> xDim, h_graph_prop -> yDim, h_graph_prop -> total_edges);
-    // std::cout << "Check, " << h_source.size() << " and " << h_destination.size() << std::endl;
-    // printf("Max element is %lu\n", *iter);
-
-    // vertex block code start
-
-    unsigned long vertex_blocks_count_init = ceil( double(h_graph_prop -> xDim) / VERTEX_BLOCK_SIZE);
-
-    printf("Vertex blocks needed = %lu\n", vertex_blocks_count_init);
-
-    struct vertex_dictionary_sentinel *device_vertex_sentinel;
-    cudaMalloc(&device_vertex_sentinel, sizeof(struct vertex_dictionary_sentinel));
-
-    // thrust::host_vector <struct vertex_block *> h_vertex_preallocate_list(VERTEX_PREALLOCATE_LIST_SIZE);
-    thrust::host_vector <struct edge_block *> h_edge_preallocate_list(EDGE_PREALLOCATE_LIST_SIZE);
-    // thrust::host_vector <struct adjacency_sentinel *> h_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
-    thrust::host_vector <struct adjacency_sentinel_new *> h_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
-    
-    
-    struct graph_properties *d_graph_prop;
-    cudaMalloc(&d_graph_prop, sizeof(struct graph_properties));
-	cudaMemcpy(d_graph_prop, &h_graph_prop, sizeof(struct graph_properties), cudaMemcpyHostToDevice);
-
-    // Individual mallocs or one single big malloc to reduce overhead??
-    // std::cout << "Checkpoint" << std::endl;
-
-    // for(unsigned long i = 0 ; i < vertex_blocks_count_init ; i++) {
-
-    //     struct vertex_block *device_vertex_block;
-    //     cudaMalloc(&device_vertex_block, sizeof(struct vertex_block));
-    //     h_vertex_preallocate_list[i] = device_vertex_block;     
+    //     h_prefix_sum_vertex_degrees[i] += h_prefix_sum_vertex_degrees[i-1] + h_source_degree[i];
+    //     // printf("%ld ", h_prefix_sum_vertex_degrees[i]);
 
     // }
-
-    // struct vertex_block *device_vertex_block;
-    // cudaMalloc((struct vertex_block**)&device_vertex_block, vertex_blocks_count_init * sizeof(struct vertex_block));
-
-    // allocate only necessary vertex sentinel nodes, running out of memory
-
-    // for(unsigned long i = 0 ; i < vertex_size ; i++) {
-    //     std::cout << i << std::endl;
-    //     struct adjacency_sentinel *device_adjacency_sentinel;
-    //     cudaMalloc(&device_adjacency_sentinel, sizeof(struct adjacency_sentinel));
-    //     h_adjacency_sentinel_list[i] = device_adjacency_sentinel;
-
-    // }
-
-    struct vertex_dictionary_structure *device_vertex_dictionary;
-    cudaMalloc(&device_vertex_dictionary, sizeof(struct vertex_dictionary_structure));
-
-    // struct adjacency_sentinel *device_adjacency_sentinel;
-    // cudaMalloc((struct adjacency_sentinel**)&device_adjacency_sentinel, vertex_size * sizeof(struct adjacency_sentinel));
-    struct adjacency_sentinel_new *device_adjacency_sentinel;
-    cudaMalloc((struct adjacency_sentinel_new**)&device_adjacency_sentinel, vertex_size * sizeof(struct adjacency_sentinel_new));
-
-    cudaDeviceSynchronize();
-
-    // std::cout << std::endl << "Host side" << std::endl << "Vertex blocks calculation" << std::endl << "Vertex block\t" << "GPU address" << std::endl;
-    // for(unsigned long i = 0 ; i < vertex_blocks_count_init ; i++)
-    //     // printf("%lu\t\t%p\n", i, h_vertex_preallocate_list[i]);  
-    //     printf("%lu\t\t%p\n", i, device_vertex_block + i);  
-    
-    thrust::host_vector <unsigned long> h_edge_blocks_count_init(h_graph_prop->xDim);
-    
-    // sleep(5);
-
-    // unsigned long k = 0;
     unsigned long total_edge_blocks_count_init = 0;
     // std::cout << "Edge blocks calculation" << std::endl << "Source\tEdge block count\tGPU address" << std::endl;
     for(unsigned long i = 0 ; i < h_graph_prop->xDim ; i++) {
@@ -1548,6 +1655,8 @@ int main(void) {
         unsigned long edge_blocks = ceil(double(h_source_degree[i]) / EDGE_BLOCK_SIZE);
         h_edge_blocks_count_init[i] = edge_blocks;
         total_edge_blocks_count_init += edge_blocks;
+
+        // std::cout << i + 1 << " needs " << edge_blocks << " edge blocks" << std::endl;
 
         // for(unsigned long j = 0 ; j < h_edge_blocks_count_init[i] ; j++) {
 
@@ -1561,7 +1670,6 @@ int main(void) {
     }
 
     printf("Total edge blocks needed = %lu\n", total_edge_blocks_count_init);
-    // sleep(5);
 
     h_prefix_sum_edge_blocks[0] = h_edge_blocks_count_init[0];
     // printf("Prefix sum array edge blocks\n%ld ", h_prefix_sum_edge_blocks[0]);
@@ -1571,56 +1679,30 @@ int main(void) {
         // printf("%ld ", h_prefix_sum_edge_blocks[i]);
 
     }
-    // printf("\n");
 
     struct edge_block *device_edge_block;
     cudaMalloc((struct edge_block**)&device_edge_block, total_edge_blocks_count_init * sizeof(struct edge_block));
 
-    // thrust::device_vector <struct vertex_block *> d_vertex_preallocate_list(VERTEX_PREALLOCATE_LIST_SIZE);
-    thrust::device_vector <struct edge_block *> d_edge_preallocate_list(EDGE_PREALLOCATE_LIST_SIZE);
-    // thrust::device_vector <struct adjacency_sentinel *> d_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
-    thrust::device_vector <struct adjacency_sentinel_new *> d_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
-    thrust::device_vector <unsigned long> d_source(h_graph_prop->total_edges);
-    thrust::device_vector <unsigned long> d_destination(h_graph_prop->total_edges);
-    thrust::device_vector <unsigned long> d_edge_blocks_count_init(h_graph_prop->xDim);
-    thrust::device_vector <unsigned long> d_prefix_sum_edge_blocks(h_graph_prop->xDim);
-    thrust::device_vector <unsigned long> d_prefix_sum_vertex_degrees(vertex_size);
-  
-    // thrust::copy(h_vertex_preallocate_list.begin(), h_vertex_preallocate_list.end(), d_vertex_preallocate_list.begin());
-    // thrust::copy(h_edge_preallocate_list.begin(), h_edge_preallocate_list.end(), d_edge_preallocate_list.begin());
-    thrust::copy(h_adjacency_sentinel_list.begin(), h_adjacency_sentinel_list.end(), d_adjacency_sentinel_list.begin());
-    thrust::copy(h_source.begin(), h_source.end(), d_source.begin());
-    thrust::copy(h_destination.begin(), h_destination.end(), d_destination.begin());
+    thrust::device_vector <unsigned long> d_edge_blocks_count_init(vertex_size);
     thrust::copy(h_edge_blocks_count_init.begin(), h_edge_blocks_count_init.end(), d_edge_blocks_count_init.begin());
-    thrust::copy(h_prefix_sum_edge_blocks.begin(), h_prefix_sum_edge_blocks.end(), d_prefix_sum_edge_blocks.begin());
-    thrust::copy(h_prefix_sum_vertex_degrees.begin(), h_prefix_sum_vertex_degrees.end(), d_prefix_sum_vertex_degrees.begin());
-
-    // struct vertex_block** dvpl = thrust::raw_pointer_cast(d_vertex_preallocate_list.data());
-    // struct edge_block** depl = thrust::raw_pointer_cast(d_edge_preallocate_list.data());
-    // struct adjacency_sentinel** dapl = thrust::raw_pointer_cast(d_adjacency_sentinel_list.data());
-    struct adjacency_sentinel_new** dapl = thrust::raw_pointer_cast(d_adjacency_sentinel_list.data());
-    unsigned long* source = thrust::raw_pointer_cast(d_source.data());
-    unsigned long* destination = thrust::raw_pointer_cast(d_destination.data());
     unsigned long* ebci = thrust::raw_pointer_cast(d_edge_blocks_count_init.data());
+
+    thrust::device_vector <unsigned long> d_prefix_sum_edge_blocks(vertex_size);
+    thrust::copy(h_prefix_sum_edge_blocks.begin(), h_prefix_sum_edge_blocks.end(), d_prefix_sum_edge_blocks.begin());
     unsigned long* pseb = thrust::raw_pointer_cast(d_prefix_sum_edge_blocks.data());
-    unsigned long* psvd = thrust::raw_pointer_cast(d_prefix_sum_vertex_degrees.data());
 
-    section3 = clock() - section3;
-
-    clock_t total_time, time_req, push_to_queues_time, vd_time, al_time;
-    time_req = clock();
-
-    printf("GPU side\n");
+    thrust::device_vector <unsigned long> d_source(batch_size);
+    thrust::device_vector <unsigned long> d_destination(batch_size);
+    thrust::device_vector <unsigned long> d_prefix_sum_vertex_degrees(vertex_size);
 
     unsigned long thread_blocks;
-
 
     // Parallelize this
     // push_preallocate_list_to_device_queue_kernel<<< 1, 1>>>(device_vertex_block, device_edge_block, dapl, vertex_blocks_count_init, ebci, total_edge_blocks_count_init);
     
-    thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);    
+    // thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);    
 
-    push_to_queues_time = clock();
+    // push_to_queues_time = clock();
 
     data_structure_init<<< 1, 1>>>(device_vertex_dictionary);
     // parallel_push_vertex_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_vertex_block, dapl, vertex_blocks_count_init);
@@ -1628,12 +1710,12 @@ int main(void) {
     thread_blocks = ceil(double(total_edge_blocks_count_init) / THREADS_PER_BLOCK);
 
     // parallel_push_edge_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, dapl, ebci, total_edge_blocks_count_init);
-    parallel_push_edge_preallocate_list_to_device_queue_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, dapl, ebci, total_edge_blocks_count_init);
+    parallel_push_edge_preallocate_list_to_device_queue_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, total_edge_blocks_count_init);
 
-    parallel_push_queue_update<<< 1, 1>>>(vertex_blocks_count_init, total_edge_blocks_count_init);
+    parallel_push_queue_update<<< 1, 1>>>(total_edge_blocks_count_init);
     cudaDeviceSynchronize();
 
-    push_to_queues_time = clock() - push_to_queues_time;
+    // push_to_queues_time = clock() - push_to_queues_time;
 
 
     // sleep(5);
@@ -1642,42 +1724,441 @@ int main(void) {
     // thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);
     // std::cout << "Thread blocks vertex init = " << thread_blocks << std::endl;
     // vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(dvpl, dapl, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
-    vd_time = clock();
+    // vd_time = clock();
     // vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_vertex_block, device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
     thread_blocks = ceil(double(vertex_size) / THREADS_PER_BLOCK);
-    std::cout << "Thread blocks vertex init = " << thread_blocks << std::endl;
+    // std::cout << "Thread blocks vertex init = " << thread_blocks << std::endl;
     // parallel_vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci, device_vertex_dictionary);
-    parallel_vertex_dictionary_init_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci, device_vertex_dictionary);
+    parallel_vertex_dictionary_init_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_adjacency_sentinel, vertex_size, ebci, device_vertex_dictionary);
 
 
-    cudaDeviceSynchronize();
-    vd_time = clock() - vd_time;
+    for(unsigned long i = 0 ; i < total_batches ; i++) {
 
-    thread_blocks = ceil(double(h_graph_prop->xDim) / THREADS_PER_BLOCK);
-    std::cout << "Thread blocks edge init = " << thread_blocks << std::endl;
+        // section2 = clock();
 
-    // sleep(5);
+        // for(unsigned long i = 0 ; i < h_graph_prop->total_edges ; i++) {
+        
+        //     // printf("%lu and %lu\n", h_source[i], h_destination[i]);
+        //     h_source_degree[h_source[i] - 1]++;
+        
+        // }
 
-    // adjacency_list_init<<< thread_blocks, THREADS_PER_BLOCK>>>(depl, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size);
-    al_time = clock();
-    // adjacency_list_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, thread_blocks);
-    // adjacency_list_init_modded<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, thread_blocks, device_vertex_dictionary);
-    // adjacency_list_init_modded_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, psvd, thread_blocks, device_vertex_dictionary);
-    adjacency_list_init_modded_v2<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, psvd, thread_blocks, device_vertex_dictionary);
+        thrust::fill(h_source_degree.begin(), h_source_degree.end(), 0);
+        thrust::fill(h_prefix_sum_vertex_degrees.begin(), h_prefix_sum_vertex_degrees.end(), 0);
+        thrust::fill(d_source.begin(), d_source.end(), 0);
+        thrust::fill(d_destination.begin(), d_destination.end(), 0);
+        thrust::fill(d_prefix_sum_vertex_degrees.begin(), d_prefix_sum_vertex_degrees.end(), 0);
 
-    // Seperate kernel for updating queues due to performance issues for global barriers
+        unsigned long start_index = i * batch_size;
+        unsigned long end_index;
+
+        unsigned long remaining_edges = edge_size - start_index;
+
+        if(remaining_edges <= batch_size)
+            end_index = edge_size;
+        else
+            end_index = (i + 1) * batch_size; 
+
+        unsigned long current_batch = end_index - start_index;
+
+        for(unsigned long j = start_index ; j < end_index ; j++) {
+        
+            // printf("%lu and %lu\n", h_source[i], h_destination[i]);
+            h_source_degree[h_source[j] - 1]++;
+        
+        }
+
+        // std::cout << "Checkpoint 1" << std::endl;
+
+        // section2 = clock() - section2;
+
+        // for(unsigned long i = 0 ; i < vertex_size ; i++) {
+        //     if(h_source_degree[i] == 40)
+        //         printf("Hit\n");
+        // }
+
+        // unsigned long degree_distribution[41] = {0};
+        // unsigned long total_degree = 0;
+        // for(unsigned long i = 0 ; i < vertex_size ; i++) {
+
+        //     degree_distribution[h_source_degree[i]] += 1;
+        //     total_degree += h_source_degree[i];
+
+        // }
+
+        // for(unsigned long i = 0 ; i < 41 ; i++) {
+
+        //     // printf("Degree %lu has count %lu\n", i, degree_distribution[i]);
+        //     printf("%lu ", degree_distribution[i]);
+
+        // }
+        // printf("Total degree is %lu\n", total_degree);
+
+        // printf("Checkpoint\n");
+
+        // for(unsigned long i = 0 ; i < vertex_size ; i++) {
+        
+        //     // printf("%lu and %lu\n", h_source[i], h_destination[i]);
+        //     if(h_source_degree[i] == 17)
+        //         printf("Highest degree vertex is %lu\n", i);
+        
+        // }
+
+
+        // std::cout << std::endl << "After sorting" << std::endl << std::endl;
+
+        // sort test start
+
+        // section2a = clock();
+
+        // unsigned long* h_source_ptr = thrust::raw_pointer_cast(h_source.data());
+        // unsigned long* h_destination_ptr = thrust::raw_pointer_cast(h_destination.data());
+        // thrust::sort_by_key(thrust::host, thrust::host_ptr<unsigned long> (h_source), thrust::host_ptr<unsigned long> (h_source + edge_size), thrust::host_ptr<unsigned long> (h_destination));
+        // thrust::sort_by_key(thrust::host, thrust::raw_pointer_cast(h_source.data()), thrust::raw_pointer_cast(h_source.data()) + edge_size, thrust::raw_pointer_cast(h_destination.data()));
+     
+     
+        thrust::sort_by_key(thrust::host, thrust::raw_pointer_cast(h_source.data()) + start_index, thrust::raw_pointer_cast(h_source.data()) + end_index, thrust::raw_pointer_cast(h_destination.data()) + start_index);
+
+
+
+        // std::cout << "Checkpoint 2" << std::endl;
+
+
+        // printf("Sorting done\n");
+
+        // if(choice == 2) {
+
+        //     unsigned long current = h_source[0];
+        //     unsigned long start_index = 0, end_index = 0;
+        //     for(unsigned long i = 0 ; i < 25 ; i++) {
+
+        //         if((current != h_source[i])) {
+
+        //             // std::cout << "start_index is " << start_index << " and end_index is " << end_index << std::endl;
+        //             thrust::sort_by_key(thrust::host, h_destination_ptr + start_index, h_destination_ptr + end_index, h_source_ptr + start_index);
+        //             start_index = end_index;
+        //             current = h_source[i];
+
+        //         }
+                
+        //         end_index++;
+
+        //     }
+
+        //     // std::cout << "start_index is " << start_index << " and end_index is " << end_index << std::endl;
+        //     thrust::sort_by_key(thrust::host, h_destination_ptr + start_index, h_destination_ptr + end_index, h_source_ptr + start_index);
+
+        // }
+
+        // section2a = clock() - section2a;
+
+        // after sort
+        // for(unsigned long i = 0 ; i < h_graph_prop->total_edges ; i++) {
+        
+        //     printf("%lu and %lu\n", h_source[i], h_destination[i]);
+        //     // h_source_degree[h_source[i] - 1]++;
+        
+        // }
+        // printf("After final sort\n");
+
+        // for(unsigned long i = 0 ; i < h_graph_prop->total_edges ; i++) {
+        
+        //     printf("%lu and %lu\n", h_source[i], h_destination[i]);
+        //     // h_source_degree[h_source[i] - 1]++;
+        
+        // }    
+
+        // sort test end
+
+        // section3 = clock();
+
+        // unsigned long zero_count = 0;
+        // // std::cout << "Printing degree of each source vertex" << std::endl;
+        // for(unsigned long i = 0 ; i < h_graph_prop->xDim ; i++) {
+        //     // printf("%lu ", h_source_degree[i]);
+        //     if(h_source_degree[i] == 0)
+        //         zero_count++;
+        // }
+        // // sleep(15);
+        // printf("zero count is %lu\n", zero_count);
+
+        h_prefix_sum_vertex_degrees[0] = h_source_degree[0];
+        // printf("Prefix sum array vertex degrees\n%ld ", h_prefix_sum_vertex_degrees[0]);
+        for(unsigned long j = 1 ; j < vertex_size ; j++) {
+
+            h_prefix_sum_vertex_degrees[j] += h_prefix_sum_vertex_degrees[j-1] + h_source_degree[j];
+            // printf("%ld ", h_prefix_sum_vertex_degrees[i]);
+
+        }
+        // printf("\n");
+        
+
+
+        // sleep(5);
+
+        // thrust::host_vector <unsigned long> ::iterator iter = thrust::max_element(h_source.begin(), h_source.end());
+
+        // printf("xDim = %lu, yDim = %lu, Total Edges = %lu\n", h_graph_prop -> xDim, h_graph_prop -> yDim, h_graph_prop -> total_edges);
+        // std::cout << "Check, " << h_source.size() << " and " << h_destination.size() << std::endl;
+        // printf("Max element is %lu\n", *iter);
+
+        // vertex block code start
+
+        // unsigned long vertex_blocks_count_init = ceil( double(h_graph_prop -> xDim) / VERTEX_BLOCK_SIZE);
+
+        // printf("Vertex blocks needed = %lu\n", vertex_blocks_count_init);
+
+        // struct vertex_dictionary_sentinel *device_vertex_sentinel;
+        // cudaMalloc(&device_vertex_sentinel, sizeof(struct vertex_dictionary_sentinel));
+
+        // thrust::host_vector <struct vertex_block *> h_vertex_preallocate_list(VERTEX_PREALLOCATE_LIST_SIZE);
+        // thrust::host_vector <struct edge_block *> h_edge_preallocate_list(EDGE_PREALLOCATE_LIST_SIZE);
+        // thrust::host_vector <struct adjacency_sentinel *> h_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
+        // thrust::host_vector <struct adjacency_sentinel_new *> h_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
+        
+        
+        // struct graph_properties *d_graph_prop;
+        // cudaMalloc(&d_graph_prop, sizeof(struct graph_properties));
+        // cudaMemcpy(d_graph_prop, &h_graph_prop, sizeof(struct graph_properties), cudaMemcpyHostToDevice);
+
+        // Individual mallocs or one single big malloc to reduce overhead??
+        // std::cout << "Checkpoint" << std::endl;
+
+        // for(unsigned long i = 0 ; i < vertex_blocks_count_init ; i++) {
+
+        //     struct vertex_block *device_vertex_block;
+        //     cudaMalloc(&device_vertex_block, sizeof(struct vertex_block));
+        //     h_vertex_preallocate_list[i] = device_vertex_block;     
+
+        // }
+
+        // struct vertex_block *device_vertex_block;
+        // cudaMalloc((struct vertex_block**)&device_vertex_block, vertex_blocks_count_init * sizeof(struct vertex_block));
+
+        // allocate only necessary vertex sentinel nodes, running out of memory
+
+        // for(unsigned long i = 0 ; i < vertex_size ; i++) {
+        //     std::cout << i << std::endl;
+        //     struct adjacency_sentinel *device_adjacency_sentinel;
+        //     cudaMalloc(&device_adjacency_sentinel, sizeof(struct adjacency_sentinel));
+        //     h_adjacency_sentinel_list[i] = device_adjacency_sentinel;
+
+        // }
+
+        // struct vertex_dictionary_structure *device_vertex_dictionary;
+        // cudaMalloc(&device_vertex_dictionary, sizeof(struct vertex_dictionary_structure));
+
+        // struct adjacency_sentinel *device_adjacency_sentinel;
+        // cudaMalloc((struct adjacency_sentinel**)&device_adjacency_sentinel, vertex_size * sizeof(struct adjacency_sentinel));
+
+        // struct adjacency_sentinel_new *device_adjacency_sentinel;
+        // cudaMalloc((struct adjacency_sentinel_new**)&device_adjacency_sentinel, vertex_size * sizeof(struct adjacency_sentinel_new));
+
+        cudaDeviceSynchronize();
+
+        // // std::cout << std::endl << "Host side" << std::endl << "Vertex blocks calculation" << std::endl << "Vertex block\t" << "GPU address" << std::endl;
+        // // for(unsigned long i = 0 ; i < vertex_blocks_count_init ; i++)
+        // //     // printf("%lu\t\t%p\n", i, h_vertex_preallocate_list[i]);  
+        // //     printf("%lu\t\t%p\n", i, device_vertex_block + i);  
+        
+        // // thrust::host_vector <unsigned long> h_edge_blocks_count_init(vertex_size);
+        
+        // // sleep(5);
+
+        // // unsigned long k = 0;
+        // unsigned long total_edge_blocks_count_init = 0;
+        // // std::cout << "Edge blocks calculation" << std::endl << "Source\tEdge block count\tGPU address" << std::endl;
+        // for(unsigned long i = 0 ; i < h_graph_prop->xDim ; i++) {
+
+        //     unsigned long edge_blocks = ceil(double(h_source_degree[i]) / EDGE_BLOCK_SIZE);
+        //     h_edge_blocks_count_init[i] = edge_blocks;
+        //     total_edge_blocks_count_init += edge_blocks;
+
+        //     // std::cout << i + 1 << " needs " << edge_blocks << " edge blocks" << std::endl;
+
+        //     // for(unsigned long j = 0 ; j < h_edge_blocks_count_init[i] ; j++) {
+
+        //     //     struct edge_block *device_edge_block;
+        //     //     cudaMalloc(&device_edge_block, sizeof(struct edge_block));
+        //     //     h_edge_preallocate_list[k++] = device_edge_block;
+
+        //     //     std::cout << i + 1 << "\t" << edge_blocks << "\t\t\t" << device_edge_block << std::endl; 
+
+        //     // }
+        // }
+
+        // printf("Total edge blocks needed = %lu\n", total_edge_blocks_count_init);
+        // // sleep(5);
+
+        // h_prefix_sum_edge_blocks[0] = h_edge_blocks_count_init[0];
+        // // printf("Prefix sum array edge blocks\n%ld ", h_prefix_sum_edge_blocks[0]);
+        // for(unsigned long i = 1 ; i < h_graph_prop->xDim ; i++) {
+
+        //     h_prefix_sum_edge_blocks[i] += h_prefix_sum_edge_blocks[i-1] + h_edge_blocks_count_init[i];
+        //     // printf("%ld ", h_prefix_sum_edge_blocks[i]);
+
+        // }
+        // // printf("\n");
+
+        // // unsigned long temp = total_edge_blocks_count_init;
+        // // total_edge_blocks_count_init = EDGE_PREALLOCATE_LIST_SIZE;
+
+        // // memory_usage();
+
+        // struct edge_block *device_edge_block;
+        // cudaMalloc((struct edge_block**)&device_edge_block, total_edge_blocks_count_init * sizeof(struct edge_block));
+
+        // memory_usage();
+
+        // thrust::device_vector <struct vertex_block *> d_vertex_preallocate_list(VERTEX_PREALLOCATE_LIST_SIZE);
+        // thrust::device_vector <struct edge_block *> d_edge_preallocate_list(EDGE_PREALLOCATE_LIST_SIZE);
+        // thrust::device_vector <struct adjacency_sentinel *> d_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
+        // memory_usage();
+        // thrust::device_vector <struct adjacency_sentinel_new *> d_adjacency_sentinel_list(VERTEX_PREALLOCATE_LIST_SIZE);
+        // memory_usage();
+        // thrust::device_vector <unsigned long> d_source(h_graph_prop->total_edges);
+        // // memory_usage();
+        // thrust::device_vector <unsigned long> d_destination(h_graph_prop->total_edges);
+        // thrust::device_vector <unsigned long> d_source(batch_size);
+        // // memory_usage();
+        // thrust::device_vector <unsigned long> d_destination(batch_size);
+        // thrust::device_vector <unsigned long> d_source(current_batch);
+        // // memory_usage();
+        // thrust::device_vector <unsigned long> d_destination(current_batch);
+        // // memory_usage();
+        // // thrust::device_vector <unsigned long> d_edge_blocks_count_init(vertex_size);
+        // // memory_usage();
+        // // thrust::device_vector <unsigned long> d_prefix_sum_edge_blocks(vertex_size);
+        // // memory_usage();
+        // thrust::device_vector <unsigned long> d_prefix_sum_vertex_degrees(vertex_size);
+
+
+
+        memory_usage();
+
+        // thrust::copy(h_vertex_preallocate_list.begin(), h_vertex_preallocate_list.end(), d_vertex_preallocate_list.begin());
+        // thrust::copy(h_edge_preallocate_list.begin(), h_edge_preallocate_list.end(), d_edge_preallocate_list.begin());
+        // thrust::copy(h_adjacency_sentinel_list.begin(), h_adjacency_sentinel_list.end(), d_adjacency_sentinel_list.begin());
+        thrust::copy(h_source.begin() + start_index, h_source.begin() + end_index, d_source.begin());
+        thrust::copy(h_destination.begin() + start_index, h_destination.begin() + end_index, d_destination.begin());
+        // thrust::copy(h_source.begin(), h_source.end(), d_source.begin());
+        // thrust::copy(h_destination.begin(), h_destination.end(), d_destination.begin());
+        // thrust::copy(h_edge_blocks_count_init.begin(), h_edge_blocks_count_init.end(), d_edge_blocks_count_init.begin());
+        // thrust::copy(h_prefix_sum_edge_blocks.begin(), h_prefix_sum_edge_blocks.end(), d_prefix_sum_edge_blocks.begin());
+        thrust::copy(h_prefix_sum_vertex_degrees.begin(), h_prefix_sum_vertex_degrees.end(), d_prefix_sum_vertex_degrees.begin());
+
+        // struct vertex_block** dvpl = thrust::raw_pointer_cast(d_vertex_preallocate_list.data());
+        // struct edge_block** depl = thrust::raw_pointer_cast(d_edge_preallocate_list.data());
+        // struct adjacency_sentinel** dapl = thrust::raw_pointer_cast(d_adjacency_sentinel_list.data());
+        // struct adjacency_sentinel_new** dapl = thrust::raw_pointer_cast(d_adjacency_sentinel_list.data());
+        unsigned long* source = thrust::raw_pointer_cast(d_source.data());
+        unsigned long* destination = thrust::raw_pointer_cast(d_destination.data());
+        // unsigned long* ebci = thrust::raw_pointer_cast(d_edge_blocks_count_init.data());
+        // unsigned long* pseb = thrust::raw_pointer_cast(d_prefix_sum_edge_blocks.data());
+        unsigned long* psvd = thrust::raw_pointer_cast(d_prefix_sum_vertex_degrees.data());
+
+        std::cout << std::endl << "Iteration " << i << std::endl;
+
+        // for(unsigned long j = start_index ; j < end_index ; j++)
+        //     std::cout << h_source[j] << " and " << h_destination[j] << std::endl;
+        // std::cout << std::endl;
+        // for(unsigned long j = 0 ; j < vertex_size ; j++)
+        //     std::cout << h_source_degree[j] << " ";
+        // std::cout << std::endl;
+        // for(unsigned long j = 0 ; j < vertex_size ; j++)
+        //     std::cout << h_prefix_sum_vertex_degrees[j] << " ";
+        // std::cout << std::endl;
+        // section3 = clock() - section3;
+
+        clock_t total_time, time_req, push_to_queues_time, vd_time, al_time;
+        // time_req = clock();
+
+        // printf("GPU side\n");
+
+        // unsigned long thread_blocks;
+
+
+        // // Parallelize this
+        // // push_preallocate_list_to_device_queue_kernel<<< 1, 1>>>(device_vertex_block, device_edge_block, dapl, vertex_blocks_count_init, ebci, total_edge_blocks_count_init);
+        
+        // // thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);    
+
+        // push_to_queues_time = clock();
+
+        // data_structure_init<<< 1, 1>>>(device_vertex_dictionary);
+        // // parallel_push_vertex_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_vertex_block, dapl, vertex_blocks_count_init);
+
+        // thread_blocks = ceil(double(total_edge_blocks_count_init) / THREADS_PER_BLOCK);
+
+        // // parallel_push_edge_preallocate_list_to_device_queue<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, dapl, ebci, total_edge_blocks_count_init);
+        // parallel_push_edge_preallocate_list_to_device_queue_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, total_edge_blocks_count_init);
+
+        // parallel_push_queue_update<<< 1, 1>>>(total_edge_blocks_count_init);
+        // cudaDeviceSynchronize();
+
+        // push_to_queues_time = clock() - push_to_queues_time;
+
+
+        // // sleep(5);
+
+        // // Pass raw array and its size to kernel
+        // // thread_blocks = ceil(double(vertex_blocks_count_init) / THREADS_PER_BLOCK);
+        // // std::cout << "Thread blocks vertex init = " << thread_blocks << std::endl;
+        // // vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(dvpl, dapl, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
+        // vd_time = clock();
+        // // vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_vertex_block, device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci);
+        // thread_blocks = ceil(double(vertex_size) / THREADS_PER_BLOCK);
+        // // std::cout << "Thread blocks vertex init = " << thread_blocks << std::endl;
+        // // parallel_vertex_dictionary_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_adjacency_sentinel, vertex_blocks_count_init, d_graph_prop, vertex_size, ebci, device_vertex_dictionary);
+        // parallel_vertex_dictionary_init_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_adjacency_sentinel, vertex_size, ebci, device_vertex_dictionary);
+
+
+        cudaDeviceSynchronize();
+        // vd_time = clock() - vd_time;
+
+        thread_blocks = ceil(double(h_graph_prop->xDim) / THREADS_PER_BLOCK);
+        // std::cout << "Thread blocks edge init = " << thread_blocks << std::endl;
+
+        // sleep(5);
+
+        // adjacency_list_init<<< thread_blocks, THREADS_PER_BLOCK>>>(depl, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size);
+        // al_time = clock();
+        // adjacency_list_init<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, thread_blocks);
+        // adjacency_list_init_modded<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, thread_blocks, device_vertex_dictionary);
+        // adjacency_list_init_modded_v1<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, d_graph_prop, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, psvd, thread_blocks, device_vertex_dictionary);
+        adjacency_list_init_modded_v2<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, ebci, source, destination, total_edge_blocks_count_init, vertex_size, edge_size, pseb, psvd, thread_blocks, device_vertex_dictionary, i, current_batch);
+
+        // Seperate kernel for updating queues due to performance issues for global barriers
+        // printKernelmodded_v1<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
+
+        cudaDeviceSynchronize();
+        std::cout << "Outside checkpoint" << std::endl;
+
+        // d_source.clear();
+        // d_destination.clear();
+        // d_prefix_sum_vertex_degrees.clear();
+        // d_source.shrink_to_fit();
+        // d_destination.shrink_to_fit();
+        // d_prefix_sum_vertex_degrees.shrink_to_fit();
+
+        // al_time = clock() - al_time;
+        // time_req = clock() - time_req;
+        // sleep(5);
+
+        // total_time = push_to_queues_time + vd_time + al_time;
+
+    }
+
+
     update_edge_queue<<< 1, 1>>>(total_edge_blocks_count_init);
 
-    cudaDeviceSynchronize();
-    al_time = clock() - al_time;
-    time_req = clock() - time_req;
-    // sleep(5);
+    // correctness_check_kernel<<< 1, 1>>>(device_vertex_dictionary, vertex_size, edge_size, c_source, c_destination);
 
-    total_time = push_to_queues_time + vd_time + al_time;
+    // sleep(5);
 
     // printKernel<<< 1, 1>>>(device_vertex_block, vertex_size);
     // printKernelmodded<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
-    printKernelmodded_v1<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
+    // printKernelmodded_v1<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
 
     cudaDeviceSynchronize();
 
@@ -1727,16 +2208,16 @@ int main(void) {
     }
 
     printf("xDim = %lu, yDim = %lu, Total Edges = %lu\n", h_graph_prop -> xDim, h_graph_prop -> yDim, h_graph_prop -> total_edges);
-    std::cout << "Queues: " << (float)push_to_queues_time/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Vertex Dictionary: " << (float)vd_time/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Adjacency List: " << (float)al_time/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Queues: " << (float)push_to_queues_time/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Vertex Dictionary: " << (float)vd_time/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Adjacency List: " << (float)al_time/CLOCKS_PER_SEC << " seconds" << std::endl;
 
-    std::cout << "Time taken: " << (float)time_req/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Added time: " << (float)total_time/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Read file : " << (float)section1/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Degree    : " << (float)section2/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Sorting   : " << (float)section2a/CLOCKS_PER_SEC << " seconds" << std::endl;
-    std::cout << "Prefix sum, cudaMalloc, and cudaMemcpy: " << (float)section3/CLOCKS_PER_SEC << " seconds" << std::endl;      
+    // std::cout << "Time taken: " << (float)time_req/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Added time: " << (float)total_time/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Read file : " << (float)section1/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Degree    : " << (float)section2/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Sorting   : " << (float)section2a/CLOCKS_PER_SEC << " seconds" << std::endl;
+    // std::cout << "Prefix sum, cudaMalloc, and cudaMemcpy: " << (float)section3/CLOCKS_PER_SEC << " seconds" << std::endl;      
 	// // Cleanup
 	// cudaFree(d_a); cudaFree(d_b); cudaFree(d_c);
 	// printf("%d\n", c);
