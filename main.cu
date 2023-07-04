@@ -16,14 +16,15 @@
 #include <thrust/execution_policy.h>
 
 #define THREADS_PER_BLOCK 1024
-#define VERTEX_BLOCK_SIZE 200000
-#define EDGE_BLOCK_SIZE 2
+#define VERTEX_BLOCK_SIZE 17000000
+#define EDGE_BLOCK_SIZE 128
 #define VERTEX_PREALLOCATE_LIST_SIZE 2000
 #define EDGE_PREALLOCATE_LIST_SIZE 59000000
 #define BATCH_SIZE 100000
 
 #define PREALLOCATE_EDGE_BLOCKS 100
 #define SEARCH_BLOCKS_COUNT 100
+#define INFTY 1000000000
 
 // Issues faced
 // Too big of an edge_preallocate_list giving errors
@@ -2083,6 +2084,7 @@ __global__ void adjacency_list_init_modded_v5(struct edge_block* d_edge_prealloc
 
         }
 
+
         if(new_edges_count > 0) {
 
             unsigned long edge_block_entry_count;
@@ -2124,9 +2126,21 @@ __global__ void adjacency_list_init_modded_v5(struct edge_block* d_edge_prealloc
                 // }
             }
 
+            // goto exit_insert;
+
+
             for(unsigned long i = start_index ; i < end_index ; i++) {
+
+                // if((curr == NULL) || (vertex_adjacency == NULL) || (edge_block_entry_count >= EDGE_BLOCK_SIZE) || (i >= batch_size))
+                //     printf("Hit disupte null\n");
                    
-                curr->edge_block_entry[edge_block_entry_count].destination_vertex = d_csr_edges[i];                    
+                // if(edge_block_entry_count >= EDGE_BLOCK_SIZE)
+                //     printf("Hit dispute margin\n");
+
+                curr->edge_block_entry[edge_block_entry_count].destination_vertex = d_csr_edges[i];    
+
+                // if(d_csr_edges[i] == 0)
+                //     printf("Hit dispute\n");                
 
                 vertex_adjacency->active_edge_count++;
                 curr->active_edge_count++;
@@ -2135,18 +2149,35 @@ __global__ void adjacency_list_init_modded_v5(struct edge_block* d_edge_prealloc
 
                 // printf("Entry is %lu for thread #%lu at %p, counter is %lu and %lu\n", curr->edge_block_entry[edge_block_entry_count].destination_vertex, id, curr, curr->active_edge_count, vertex_adjacency->edge_block_address->active_edge_count);
 
+                // edge_block_entry_count++;
 
-                if((i + 1 < end_index) && (++edge_block_entry_count >= EDGE_BLOCK_SIZE) && (edge_block_counter < edge_blocks_required)) {
+
+                // if(edge_block_entry_count >= EDGE_BLOCK_SIZE)
+                //     edge_block_entry_count = 0;
+
+                // continue;
+
+
+                // if((i + 1 < end_index) && (++edge_block_entry_count >= EDGE_BLOCK_SIZE) && (edge_block_counter < edge_blocks_required)) {
+                if((++edge_block_entry_count >= EDGE_BLOCK_SIZE) && (i + 1 < end_index) && (edge_block_counter < edge_blocks_required)) {
+
+
 
                     // curr = curr->next;
                     // edge_block_counter++;
                     edge_block_entry_count = 0;
 
 
+                    // printf("at dispute\n");
+                    // if((curr == NULL) || (device_edge_block[0] == NULL) || (vertex_adjacency == NULL))
+                    //     printf("Dispute caught\n");
+
                     if((space_remaining != 0) && (edge_block_counter == 0))
                         curr = device_edge_block[0];
                     else
                         curr = curr + 1;
+
+
 
                     // printf("Hit for thread #%lu at %p\n", id, curr);
 
@@ -2158,11 +2189,14 @@ __global__ void adjacency_list_init_modded_v5(struct edge_block* d_edge_prealloc
                     vertex_adjacency->last_insert_edge_offset = 0;
                     // vertex_adjacency->edge_block_address[edge_block_counter] = curr;
 
+
+
                 }
 
                 // }
 
             }
+
 
             if(vertex_adjacency->last_insert_edge_offset == EDGE_BLOCK_SIZE)
                 vertex_adjacency->last_insert_edge_offset = 0;
@@ -2171,6 +2205,8 @@ __global__ void adjacency_list_init_modded_v5(struct edge_block* d_edge_prealloc
         // printf("Checkpoint final thread#%lu\n", id);
 
     }
+
+    // exit_insert:
 
     // __syncthreads();
 
@@ -2328,7 +2364,7 @@ __global__ void delete_edge_kernel(struct vertex_dictionary_structure *device_ve
 // __device__ struct edge_block *delete_blocks[SEARCH_BLOCKS_COUNT];
 // __device__ unsigned long delete_index[] = 0;
 
-__device__ struct edge_block *stack_traversal[100];
+__device__ struct edge_block *stack_traversal[1];
 __device__ unsigned long stack_top = 0;
 
 __device__ void preorderTraversal_batch_delete(struct edge_block *root, unsigned long start_index, unsigned long end_index, unsigned long *d_csr_edges) {
@@ -2430,25 +2466,503 @@ __device__ void inorderTraversal_batch_delete(struct edge_block *root, unsigned 
 }
 
 
+// __device__ struct edge_block *delete_blocks[VERTEX_BLOCK_SIZE][2];
+__device__ struct edge_block *delete_blocks_v1[EDGE_PREALLOCATE_LIST_SIZE];
+__device__ unsigned long delete_index[VERTEX_BLOCK_SIZE];
+// __device__ unsigned long delete_index_blocks[VERTEX_BLOCK_SIZE];
+// __device__ unsigned long delete_source[EDGE_PREALLOCATE_LIST_SIZE];
+__device__ unsigned long delete_source[1];
+// __device__ unsigned long delete_source_counter[EDGE_PREALLOCATE_LIST_SIZE];
 
-__global__ void batched_delete_preprocessing(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size) {
+__device__ void inorderTraversal_batch_delete_v1(struct edge_block *root, unsigned long id, unsigned long offset, unsigned long *d_prefix_sum_edge_blocks) {
 
-    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+    if(root == NULL)
+        return;
+    else {
 
-    if(id < vertex_size) {
+        inorderTraversal_batch_delete_v1(root->lptr, id, offset, d_prefix_sum_edge_blocks);
 
-        struct edge_block *root = device_vertex_dictionary->vertex_adjacency[id]->edge_block_address;
+        // search_blocks[search_index++] = root;
 
-        for(unsigned long i = 0 ; i < device_vertex_dictionary->edge_block_count[id] ; i++)
-            search_blocks[i] = NULL;
-        search_index = 0;
+        // delete_blocks[id][delete_index[id]] = root;
 
-        inorderTraversal_search(root);
+        // if(id != 0)
+            // delete_blocks_v1[d_prefix_sum_edge_blocks[id] + delete_index[id]] = root;
+        // else
+        delete_blocks_v1[delete_index[id] + offset] = root;
+        delete_source[delete_index[id]++ + offset] = id;
+        // delete_source_counter[delete_index[id]] = delete_index[id]++; 
+
+
+        // printf("id is %lu, delete_blocks is %p and delete_source is %lu and delete_source_counter is %lu\n", id, delete_blocks[id][delete_index[id] - 1], delete_source[delete_index[id] - 1 + offset], delete_source_counter[delete_index[id] - 1]);
+        
+        // delete_source[id] = id;
+
+        // for(unsigned long i = 0 ; i < EDGE_BLOCK_SIZE ; i++) {
+
+        //     for(unsigned long j = start_index ; j < end_index ; j++) {
+
+        //         // if(root->edge_block_entry[i].destination_vertex == d_csr_edges[j])
+        //             root->edge_block_entry[i].destination_vertex = 0;
+        //             if(j == BATCH_SIZE)
+        //                 printf("Hit dispute\n");
+            
+        //     }
+        // }
+
+
+        inorderTraversal_batch_delete_v1(root->rptr, id, offset, d_prefix_sum_edge_blocks);
 
     }
 
 }
 
+__global__ void batched_delete_preprocessing(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long *d_csr_offset, unsigned long *d_prefix_sum_edge_blocks, unsigned long *d_source_degrees) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if((id < vertex_size) && (device_vertex_dictionary->vertex_adjacency[id]->edge_block_address != NULL)) {
+
+        struct edge_block *root = device_vertex_dictionary->vertex_adjacency[id]->edge_block_address;
+
+        // for(unsigned long i = 0 ; i < device_vertex_dictionary->edge_block_count[id] ; i++)
+        //     search_blocks[i] = NULL;
+        delete_index[id] = 0;
+        // unsigned long offset = d_csr_offset[id];
+        unsigned long offset = 0;
+        if(id != 0)
+        //     offset = 0;
+        // else
+            offset = d_prefix_sum_edge_blocks[id - 1];
+
+        // unsigned long start_index = d_csr_offset[id];
+        // unsigned long end_index = d_csr_offset[id + 1];
+
+        // for(unsigned long i = start_index; i < end_index ; i++)
+        // delete_source[delete_index[id]++] = id;
+
+        inorderTraversal_batch_delete_v1(root, id, offset, d_prefix_sum_edge_blocks);
+
+
+
+        // printf("ID is %lu, source is %lu, and address is %p\n", id, id, delete_blocks_v1[offset]);
+
+    }
+
+}
+
+__global__ void batched_delete_kernel_v1(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long total_search_threads, unsigned long *d_csr_offset, unsigned long *d_csr_edges, unsigned long *d_prefix_sum_edge_blocks) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // if(id < vertex_size) {
+    if(id < total_search_threads) {
+
+        // __syncthreads();
+
+        // *d_search_flag = 0;
+
+
+        // unsigned long edge_block_entry = edge_block_count % EDGE_BLOCK_SIZE;
+
+
+
+
+        // struct adjacency_sentinel_new *edge_sentinel = device_vertex_dictionary->vertex_adjacency[search_source - 1];
+        unsigned long extracted_value;
+        unsigned long curr_source = delete_source[id];
+        unsigned long start_index = d_csr_offset[curr_source];
+        unsigned long end_index = d_csr_offset[curr_source + 1];
+
+        // if(id == 0) {
+        //     for(unsigned long i = 0 ; i < 10 ; i++) {
+        //         printf("%lu\n", delete_source[i]);
+        //     }
+        //     printf("\n");
+        //     for(unsigned long i = 0 ; i < 10 ; i++) {
+
+        //         if(delete_blocks[i][0] != NULL)
+        //             printf("%p\n", delete_blocks[i][0]);
+
+        //     }
+        //     printf("\n");
+        // }
+
+        
+        unsigned long offset = 0;
+        unsigned long edge_block_count = d_prefix_sum_edge_blocks[curr_source];
+        if(curr_source != 0) {
+        //     edge_block_count = d_prefix_sum_edge_blocks[curr_source];
+        //     offset = 0;
+        // }
+        // else {
+            edge_block_count = d_prefix_sum_edge_blocks[curr_source] - d_prefix_sum_edge_blocks[curr_source - 1];
+            offset = d_prefix_sum_edge_blocks[curr_source - 1];
+        }
+        // unsigned long edge_block = delete_source_counter[curr_source];
+
+        unsigned long edge_block = id - offset;
+
+        // unsigned long edge_block = d_prefix_sum_edge_blocks;
+        // if(curr_source != 0)
+        //     edge_block = d_prefix_sum_edge_blocks[curr_source] - d_prefix_sum_edge_blocks[curr_source - 1];
+        // if(curr_source == 0)
+        // edge_block = id;
+        // else
+        // edge_block = id - d_prefix_sum_edge_blocks[curr_source - 1];
+
+        // unsigned long tester = 0;
+        // if(curr_source != 0)
+        //     tester = id - offset;
+
+        // printf("ID is %lu, source is %lu, edge_block is %lu, test is %lu and address is %p\n", id, curr_source, edge_block, id - offset, delete_blocks_v1[offset + edge_block]);
+
+        // printf("Search kernel launch test for id %lu, edge_block_address %p, edge_block_count %lu, source %lu, edge_block %lu, start_index %lu and end_index %lu\n", id, delete_blocks[curr_source][edge_block], edge_block_count, curr_source, edge_block, start_index, end_index);
+
+
+        // printf("ID is %lu, start_index is %lu, end_index is %lu\n", id, start_index, end_index);
+
+        // struct edge_block *root = device_vertex_dictionary->vertex_adjacency[curr_source]->edge_block_address;
+
+        // struct edge_block *itr = edge_sentinel->edge_block_address + (edge_block);
+        // extracted_value = itr->edge_block_entry[edge_block_entry].destination_vertex;
+
+        for(unsigned long j = 0 ; j < EDGE_BLOCK_SIZE ; j++) {
+
+
+
+            for(unsigned long i = start_index ; i < end_index ; i++) {
+
+
+                // delete_blocks_v1[d_prefix_sum_edge_blocks[curr_source] + edge_block]
+                // if((delete_blocks[curr_source][edge_block] != NULL) && (delete_blocks[curr_source][edge_block]->edge_block_entry[j].destination_vertex == d_csr_edges[i]))
+                //     delete_blocks[curr_source][edge_block]->edge_block_entry[j].destination_vertex = 0;
+
+                if((delete_blocks_v1[offset + edge_block] != NULL) && (delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex == d_csr_edges[i]))
+                    delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex = 0;
+
+            
+            }
+
+        }
+
+    }
+
+    // if(id == 0)
+    //     printf("Checkpoint final\n");
+
+}
+
+__device__ void preorderTraversal_batch_delete_edge_centric(struct edge_block *root, unsigned long id, unsigned long offset, unsigned long *d_csr_offset) {
+
+    if(root == NULL)
+        return;
+    else {
+        delete_blocks_v1[delete_index[id]++ + offset] = root;
+
+        preorderTraversal_batch_delete_edge_centric(root->lptr, id, offset, d_csr_offset);
+
+        // search_blocks[search_index++] = root;
+
+        // delete_blocks[id][delete_index[id]] = root;
+
+        // if(id != 0)
+            // delete_blocks_v1[d_prefix_sum_edge_blocks[id] + delete_index[id]] = root;
+        // else
+        // delete_source[delete_index[id]++ + offset] = id;
+        // delete_source_counter[delete_index[id]] = delete_index[id]++; 
+
+
+        // printf("id is %lu, delete_blocks is %p and delete_source is %lu and delete_source_counter is %lu\n", id, delete_blocks[id][delete_index[id] - 1], delete_source[delete_index[id] - 1 + offset], delete_source_counter[delete_index[id] - 1]);
+        
+        // delete_source[id] = id;
+
+        // for(unsigned long i = 0 ; i < EDGE_BLOCK_SIZE ; i++) {
+
+        //     for(unsigned long j = start_index ; j < end_index ; j++) {
+
+        //         // if(root->edge_block_entry[i].destination_vertex == d_csr_edges[j])
+        //             root->edge_block_entry[i].destination_vertex = 0;
+        //             if(j == BATCH_SIZE)
+        //                 printf("Hit dispute\n");
+            
+        //     }
+        // }
+
+
+        preorderTraversal_batch_delete_edge_centric(root->rptr, id, offset, d_csr_offset);
+
+    }
+
+}
+
+__global__ void batched_delete_preprocessing_edge_centric(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long *d_csr_offset, unsigned long *d_prefix_sum_edge_blocks, unsigned long *d_source_degrees) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if((id < vertex_size) && (device_vertex_dictionary->vertex_adjacency[id]->edge_block_address != NULL)) {
+
+        struct edge_block *root = device_vertex_dictionary->vertex_adjacency[id]->edge_block_address;
+
+        // for(unsigned long i = 0 ; i < device_vertex_dictionary->edge_block_count[id] ; i++)
+        //     search_blocks[i] = NULL;
+        delete_index[id] = 0;
+        // unsigned long offset = d_csr_offset[id];
+        unsigned long offset = 0;
+        if(id != 0)
+        //     offset = 0;
+        // else
+            offset = d_prefix_sum_edge_blocks[id - 1];
+
+        // unsigned long start_index = d_csr_offset[id];
+        // unsigned long end_index = d_csr_offset[id + 1];
+
+        // for(unsigned long i = start_index; i < end_index ; i++)
+        // delete_source[delete_index[id]++] = id;
+
+        preorderTraversal_batch_delete_edge_centric(root, id, offset, d_csr_offset);
+
+        // printf("ID is %lu, source is %lu, and address is %p\n", id, id, delete_blocks_v1[offset]);
+
+    }
+
+    // if(id == 0)
+    //     printf("Checkpoint final preprocessing\n");
+
+}
+
+__global__ void batched_delete_kernel_edge_centric(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long total_search_threads, unsigned long *d_csr_offset, unsigned long *d_csr_edges, unsigned long *d_prefix_sum_edge_blocks, unsigned long *d_source, unsigned long *d_destination) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // if(id < vertex_size) {
+    if(id < total_search_threads) {
+
+        // __syncthreads();
+
+        // *d_search_flag = 0;
+
+
+        // unsigned long edge_block_entry = edge_block_count % EDGE_BLOCK_SIZE;
+
+        // if(id == 0) {
+
+        //     for(unsigned long i = 0 ; i < BATCH_SIZE ; i++) {
+
+        //         printf("Source is %lu and Destination is %lu\n", d_source[i], d_destination[i]);
+
+        //     }
+
+        // }
+
+
+        // struct adjacency_sentinel_new *edge_sentinel = device_vertex_dictionary->vertex_adjacency[search_source - 1];
+        // unsigned long extracted_value;
+        unsigned long curr_source = d_source[id] - 1;
+        // unsigned long start_index = d_csr_offset[curr_source];
+        // unsigned long end_index = d_csr_offset[curr_source + 1];
+
+        // if(id == 0) {
+        //     for(unsigned long i = 0 ; i < 10 ; i++) {
+        //         printf("%lu\n", delete_source[i]);
+        //     }
+        //     printf("\n");
+        //     for(unsigned long i = 0 ; i < 10 ; i++) {
+
+        //         if(delete_blocks[i][0] != NULL)
+        //             printf("%p\n", delete_blocks[i][0]);
+
+        //     }
+        //     printf("\n");
+        // }
+
+        
+        unsigned long offset = 0;
+        unsigned long edge_block_count = device_vertex_dictionary->vertex_adjacency[curr_source]->edge_block_count;
+        // unsigned long edge_block_count = d_prefix_sum_edge_blocks[curr_source];
+        if(curr_source != 0) {
+        //     edge_block_count = d_prefix_sum_edge_blocks[curr_source];
+        //     offset = 0;
+        // }
+        // else {
+            // edge_block_count = d_prefix_sum_edge_blocks[curr_source] - d_prefix_sum_edge_blocks[curr_source - 1];
+            offset = d_prefix_sum_edge_blocks[curr_source - 1];
+        }
+        // unsigned long edge_block = delete_source_counter[curr_source];
+
+        
+
+        // unsigned long edge_block = d_prefix_sum_edge_blocks;
+        // if(curr_source != 0)
+        //     edge_block = d_prefix_sum_edge_blocks[curr_source] - d_prefix_sum_edge_blocks[curr_source - 1];
+        // if(curr_source == 0)
+        // edge_block = id;
+        // else
+        // edge_block = id - d_prefix_sum_edge_blocks[curr_source - 1];
+
+        // unsigned long tester = 0;
+        // if(curr_source != 0)
+        //     tester = id - offset;
+
+        // unsigned long delete_edge = d_csr_edges[id];
+
+        // printf("ID is %lu, source is %lu, edge_block_count is %lu, edge_block is %lu, delete_edge is %lu and address is %p\n", id, d_source[id], edge_block_count, edge_block, d_destination[id], delete_blocks_v1[offset]);
+
+        // printf("Search kernel launch test for id %lu, edge_block_count %lu, source %lu, edge_block %lu, start_index %lu and end_index %lu\n", id, edge_block_count, curr_source, edge_block, start_index, end_index);
+
+
+        // printf("ID is %lu, start_index is %lu, end_index is %lu\n", id, start_index, end_index);
+
+        // struct edge_block *root = device_vertex_dictionary->vertex_adjacency[curr_source]->edge_block_address;
+
+        // struct edge_block *itr = edge_sentinel->edge_block_address + (edge_block);
+        // extracted_value = itr->edge_block_entry[edge_block_entry].destination_vertex;
+
+        // unsigned long breakFlag = 0;
+
+        // unsigned long *destination_entry;
+
+        for(unsigned long edge_block = 0 ; edge_block < edge_block_count ; edge_block++) {
+        
+            // printf("ID is %lu, source is %lu, edge_block_count is %lu, edge_block is %lu, delete_edge is %lu and address is %p\n", id, d_source[id], edge_block_count, edge_block, d_destination[id], delete_blocks_v1[offset + edge_block]);
+
+
+            if(delete_blocks_v1[offset + edge_block] != NULL) {
+
+                // unsigned long edge_block_entry_count = delete_blocks_v1[offset + edge_block]->active_edge_count;
+
+                // for(unsigned long j = 0 ; j < delete_blocks_v1[offset + edge_block]->active_edge_count ; j++) {
+                for(unsigned long j = 0 ; j < EDGE_BLOCK_SIZE ; j++) {
+
+
+
+                    // for(unsigned long i = start_index ; i < end_index ; i++) {
+
+
+                        // delete_blocks_v1[d_prefix_sum_edge_blocks[curr_source] + edge_block]
+                        // if((delete_blocks[curr_source][edge_block] != NULL) && (delete_blocks[curr_source][edge_block]->edge_block_entry[j].destination_vertex == d_csr_edges[i]))
+                        //     delete_blocks[curr_source][edge_block]->edge_block_entry[j].destination_vertex = 0;
+
+                    // if(delete_blocks_v1[offset + edge_block] != NULL) {
+
+                        // destination_entry = &(delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex);
+
+                        // if(*destination_entry == d_destination[id])
+                        //     *destination_entry = INFTY;
+                        // else if(*destination_entry == 0)
+                        //     goto exit_delete;
+
+
+                        if(delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex == d_destination[id])
+                            delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex = INFTY;
+
+                        else if(delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex == 0)
+                            goto exit_delete;
+
+
+                    // }
+
+                    // if((delete_blocks_v1[offset + edge_block] != NULL) && (delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex == d_destination[id]))
+                    //     delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex = INFTY;
+                    
+                    // else if((delete_blocks_v1[offset + edge_block] != NULL) && (delete_blocks_v1[offset + edge_block]->edge_block_entry[j].destination_vertex == 0)) {
+
+
+                    //     goto exit_delete;
+                    //     // breakFlag = 1;
+                    //     // break;
+
+                    // }
+
+
+                    
+                    // }
+
+                }
+
+            }
+
+            // if(breakFlag)
+                // break;
+
+            // printf("\n");
+        
+        }
+
+        exit_delete:
+
+    }
+
+    // if(id == 0)
+    //     printf("Checkpoint final\n");
+
+}
+
+__global__ void batched_delete_kernel_edge_centric_parallelized(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long total_search_threads, unsigned long batch_size, unsigned long *d_csr_offset, unsigned long *d_csr_edges, unsigned long *d_prefix_sum_edge_blocks, unsigned long *d_source, unsigned long *d_destination) {
+
+    unsigned long id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // if(id < vertex_size) {
+    if(id < total_search_threads) {
+
+        // __syncthreads();
+
+        // unsigned long curr_source = d_source[id] - 1;
+        unsigned long curr_source = d_source[id / EDGE_BLOCK_SIZE] - 1;
+
+        unsigned long edge_block_entry = id % EDGE_BLOCK_SIZE;
+
+        // goto exit_delete_v1;
+
+
+        unsigned long offset = 0;
+        unsigned long edge_block_count = device_vertex_dictionary->vertex_adjacency[curr_source]->edge_block_count;
+        // unsigned long edge_block_count = d_prefix_sum_edge_blocks[curr_source];
+        // unsigned long edge_block = 0;
+
+
+        if(curr_source != 0) {
+        //     edge_block_count = d_prefix_sum_edge_blocks[curr_source];
+        //     offset = 0;
+        // }
+        // else {
+            
+            // edge_block_count = d_prefix_sum_edge_blocks[curr_source] - d_prefix_sum_edge_blocks[curr_source - 1];
+            offset = d_prefix_sum_edge_blocks[curr_source - 1];
+        }
+
+
+        // if(id == 32)
+
+
+        for(unsigned long edge_block = 0; edge_block < edge_block_count ; edge_block++) {
+        
+            // printf("ID is %lu, source is %lu, edge_block_count is %lu, edge_block is %lu, delete_edge is %lu and address is %p\n", id, curr_source, edge_block_count, edge_block, d_destination[id], delete_blocks_v1[offset + edge_block]);
+            // if(curr_source == 4)
+            //     printf("ID is %lu, source is %lu, destination is %lu, entry is %lu\n", id, curr_source + 1, d_destination[id / EDGE_BLOCK_SIZE], delete_blocks_v1[offset + edge_block]->edge_block_entry[edge_block_entry].destination_vertex);
+
+
+            if(delete_blocks_v1[offset + edge_block] != NULL) {
+
+                // for(unsigned long j = 0 ; j < EDGE_BLOCK_SIZE ; j++) {
+
+                        if(delete_blocks_v1[offset + edge_block]->edge_block_entry[edge_block_entry].destination_vertex == d_destination[id / EDGE_BLOCK_SIZE])
+                            delete_blocks_v1[offset + edge_block]->edge_block_entry[edge_block_entry].destination_vertex = INFTY;
+
+                        // else if(delete_blocks_v1[offset + edge_block]->edge_block_entry[edge_block_entry].destination_vertex == 0)
+                        //     goto exit_delete;
+
+                // }
+
+            }
+        
+        }
+
+        exit_delete_v1:
+
+    }
+
+}
 
 __global__ void batched_delete_kernel(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long vertex_size, unsigned long total_search_threads, unsigned long *d_csr_offset, unsigned long *d_csr_edges) {
 
@@ -2782,14 +3296,12 @@ __global__ void printKernelmodded_v1(struct vertex_dictionary_structure *device_
 
 }
 
-__device__ void inorderTraversal(struct edge_block *root) {
+__device__ void preorderTraversal(struct edge_block *root) {
 
     if(root == NULL)
         return;
     
     else {
-
-        inorderTraversal(root->lptr);
 
         printf("\nedge block edge count = %lu, %p, ", root->active_edge_count, root);
 
@@ -2807,9 +3319,13 @@ __device__ void inorderTraversal(struct edge_block *root) {
             // }
         }
 
+        preorderTraversal(root->lptr);
+
+
+
         // printf("\n");
 
-        inorderTraversal(root->rptr);
+        preorderTraversal(root->rptr);
 
     }
 
@@ -2851,9 +3367,9 @@ __global__ void printKernelmodded_v2(struct vertex_dictionary_structure *device_
         // printf("Checkpoint\n");
 
         if((device_vertex_dictionary->vertex_adjacency[i] != NULL) && (device_vertex_dictionary->vertex_id[i] != 0)) {
-            printf("%lu -> , edge blocks = %lu, edge sentinel = %p, root = %p, active edge count = %lu, destination vertices -> ", device_vertex_dictionary->vertex_id[i], device_vertex_dictionary->edge_block_count[i], device_vertex_dictionary->vertex_adjacency[i], device_vertex_dictionary->vertex_adjacency[i]->edge_block_address, device_vertex_dictionary->vertex_adjacency[i]->active_edge_count);
+            printf("%lu -> , edge blocks = %lu, edge sentinel = %p, root = %p, active edge count = %lu, destination vertices -> ", device_vertex_dictionary->vertex_id[i], device_vertex_dictionary->vertex_adjacency[i]->edge_block_count, device_vertex_dictionary->vertex_adjacency[i], device_vertex_dictionary->vertex_adjacency[i]->edge_block_address, device_vertex_dictionary->vertex_adjacency[i]->active_edge_count);
 
-            inorderTraversal(device_vertex_dictionary->vertex_adjacency[i]->edge_block_address);
+            preorderTraversal(device_vertex_dictionary->vertex_adjacency[i]->edge_block_address);
             printf("\n");   
 
             // unsigned long edge_block_counter = 0;
@@ -2892,6 +3408,36 @@ __global__ void printKernelmodded_v2(struct vertex_dictionary_structure *device_
 
     printf("VDS = %lu\n", d_v_d_sentinel.vertex_count);
     printf("K2 counter = %u\n", k2counter);
+
+}
+
+__global__ void cbt_stats(struct vertex_dictionary_structure *device_vertex_dictionary, unsigned long size) {
+
+    printf("Printing Bucket Stats\n");
+    unsigned long tree_height[100];
+    unsigned long max_height = 0;
+
+    for(unsigned long i = 0 ; i < device_vertex_dictionary->active_vertex_count ; i++) {
+
+        if((device_vertex_dictionary->vertex_adjacency[i] != NULL) && (device_vertex_dictionary->vertex_id[i] != 0)) {
+            // printf("%lu -> , edge blocks = %lu, edge sentinel = %p, root = %p, active edge count = %lu, destination vertices -> ", device_vertex_dictionary->vertex_id[i], device_vertex_dictionary->edge_block_count[i], device_vertex_dictionary->vertex_adjacency[i], device_vertex_dictionary->vertex_adjacency[i]->edge_block_address, device_vertex_dictionary->vertex_adjacency[i]->active_edge_count);
+
+            unsigned long height = floor(log2(ceil(double(device_vertex_dictionary->vertex_adjacency[i]->active_edge_count) / EDGE_BLOCK_SIZE)));
+            tree_height[height]++;
+            if(height > max_height)
+                max_height = height;
+            // inorderTraversal(device_vertex_dictionary->vertex_adjacency[i]->edge_block_address);
+            // printf("\n");   
+
+        }
+
+    }
+
+    for(unsigned long i = 0 ; i <= max_height ; i++) {
+        printf("Height %lu has %lu vertices\n", i, tree_height[i]);
+        tree_height[i] = 0;
+    }
+
 
 }
 
@@ -3159,6 +3705,49 @@ void generateCSRnew(unsigned long vertex_size, unsigned long edge_size, thrust::
     std::cout << std::endl << std::endl << std::endl;
 }
 
+void generate_random_batch(unsigned long vertex_size, unsigned long batch_size, thrust::host_vector <unsigned long> &h_source, thrust::host_vector <unsigned long> &h_destination, thrust::host_vector <unsigned long> &h_source_degrees_new) {
+
+    // unsigned long batch_size = 10;
+    // unsigned long vertex_size = 30;
+
+    unsigned long seed = 0;
+    unsigned long range = 0;
+    unsigned long offset = 0;
+
+    // unsigned long source_array[10];
+    // unsigned long destination_array[10];
+
+	srand(seed + 1);
+	for (unsigned long i = 0; i < batch_size / 2; ++i)
+	{
+        // EdgeUpdateType edge_update_data;
+        unsigned long intermediate = rand() % ((range && (range < vertex_size)) ? range : vertex_size);
+        unsigned long source;
+        if(offset + intermediate < vertex_size)
+            source = offset + intermediate;
+        else
+            source = intermediate;
+        h_source[i] = source + 1;
+        h_destination[i] = (rand() % vertex_size) + 1;
+        // edge_update->edge_update.push_back(edge_update_data);
+	}
+
+  for (unsigned long i = batch_size / 2; i < batch_size; ++i)
+	{
+        // EdgeUpdateType edge_update_data;
+        unsigned long intermediate = rand() % (vertex_size);
+        unsigned long source;
+        if(offset + intermediate < vertex_size)
+            source = offset + intermediate;
+        else
+            source = intermediate;
+        h_source[i] = source + 1;
+        h_destination[i] = (rand() % vertex_size) + 1;
+        // edge_update->edge_update.push_back(edge_update_data);
+	}
+
+}
+
 void generate_csr_batch(unsigned long vertex_size, unsigned long edge_size, thrust::host_vector <unsigned long> &h_source, thrust::host_vector <unsigned long> &h_destination, thrust::host_vector <unsigned long> &h_csr_offset_new, thrust::host_vector <unsigned long> &h_csr_edges_new, thrust::host_vector <unsigned long> &h_source_degrees_new, thrust::host_vector <unsigned long> &h_edge_blocks_count, thrust::host_vector <unsigned long> &h_prefix_sum_edge_blocks_new, unsigned long *h_batch_update_data, unsigned long batch_size, unsigned long total_batches, unsigned long batch_number,  thrust::host_vector <unsigned long> &space_remaining, unsigned long *total_edge_blocks_count_batch, clock_t *init_time) {
 
     thrust::host_vector <unsigned long> index(vertex_size);
@@ -3188,6 +3777,8 @@ void generate_csr_batch(unsigned long vertex_size, unsigned long edge_size, thru
 
     }
 
+    // std::cout << "Checkpoint 1" << std::endl;
+
     // for(unsigned long i = 1 ; i < vertex_size ; i++) {
 
     //     if(h_source_degrees_new[i] > max)
@@ -3213,6 +3804,9 @@ void generate_csr_batch(unsigned long vertex_size, unsigned long edge_size, thru
         // h_batch_update_data[j] = h_batch_update_data[j - 1] + h_source_degrees_new[j - 1];
     }
 
+    // std::cout << "Checkpoint 2 , start_index is " << start_index << " and end_index is " << end_index << std::endl;
+
+
     // unsigned long offset = vertex_size + 1;
     unsigned long offset = 0;
 
@@ -3230,6 +3824,8 @@ void generate_csr_batch(unsigned long vertex_size, unsigned long edge_size, thru
             h_batch_update_data[offset + h_csr_offset_new[h_source[i] - 1] + index[h_source[i] - 1]++] = h_destination[i];
         }
     }
+
+    // std::cout << "Checkpoint 3" << std::endl;
 
     // calculating edge blocks required for this batch
     // unsigned long total_edge_blocks_count_init = 0;
@@ -3423,7 +4019,7 @@ int main(void) {
     // char fileLoc[20] = "input.mtx";
     // char fileLoc[20] = "input1.mtx";
     // char fileLoc[30] = "chesapeake.mtx";
-    char fileLoc[30] = "inf-luxembourg_osm.mtx";
+    // char fileLoc[30] = "inf-luxembourg_osm.mtx";
     // char fileLoc[30] = "rgg_n_2_16_s0.mtx";
     // char fileLoc[30] = "delaunay_n10.mtx";
     // char fileLoc[30] = "delaunay_n12.mtx";
@@ -3432,7 +4028,7 @@ int main(void) {
     // char fileLoc[30] = "delaunay_n17.mtx";
     // char fileLoc[30] = "fe-ocean.mtx";
     // char fileLoc[30] = "co-papers-dblp.mtx";
-    // char fileLoc[30] = "co-papers-citeseer.mtx";
+    char fileLoc[30] = "co-papers-citeseer.mtx";
     // char fileLoc[30] = "hugetrace-00020.mtx";
     // char fileLoc[30] = "channel-500x100x100-b050.mtx";
     // char fileLoc[30] = "kron_g500-logn16.mtx";
@@ -3609,6 +4205,8 @@ int main(void) {
     thrust::device_vector <unsigned long> d_csr_edges_new(batch_size);
     thrust::device_vector <unsigned long> d_edge_blocks_count(vertex_size);
     thrust::device_vector <unsigned long> d_prefix_sum_edge_blocks_new(vertex_size);
+    // thrust::device_vector <unsigned long> d_source(BATCH_SIZE);
+    // thrust::device_vector <unsigned long> d_destination(BATCH_SIZE);
 
     // thrust::device_vector <unsigned long> d_batch_update_data(vertex_size + 1 + batch_size + vertex_size);
     temp_time = clock();
@@ -3676,6 +4274,8 @@ int main(void) {
     unsigned long* d_csr_edges_new_pointer = thrust::raw_pointer_cast(d_csr_edges_new.data());
     unsigned long* d_edge_blocks_count_pointer = thrust::raw_pointer_cast(d_edge_blocks_count.data());
     unsigned long* d_prefix_sum_edge_blocks_new_pointer = thrust::raw_pointer_cast(d_prefix_sum_edge_blocks_new.data());
+    // unsigned long* d_source_pointer = thrust::raw_pointer_cast(d_source.data());
+    // unsigned long* d_destination_pointer = thrust::raw_pointer_cast(d_destination.data());
 
     // unsigned long* d_batch_update_data_pointer = thrust::raw_pointer_cast(d_batch_update_data.data());
 
@@ -3833,6 +4433,7 @@ int main(void) {
             // printKernelmodded_v1<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
             // if(i < 10)
             // printKernelmodded_v2<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
+            cbt_stats<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
 
             cudaDeviceSynchronize();
             // std::cout << "Outside checkpoint" << std::endl;
@@ -3887,6 +4488,10 @@ int main(void) {
             
             // }
 
+            unsigned long graph_choice;
+            std::cout << std::endl << "Enter input type" << std::endl << "1. Real Graph" << std::endl << "2. Random Graph" << std::endl;
+            std::cin >> graph_choice;
+
             std::cout << std::endl << "Iteration " << i << std::endl;
 
             // thrust::copy(h_csr_offset_new.begin(), h_csr_offset_new.end(), d_csr_offset_new.begin());
@@ -3896,8 +4501,17 @@ int main(void) {
 
             total_edge_blocks_count_batch = 0;
 
-            generate_csr_batch(vertex_size, edge_size, h_source, h_destination, h_csr_offset_new, h_csr_edges_new, h_source_degrees_new, h_edge_blocks_count, h_prefix_sum_edge_blocks_new, h_batch_update_data, BATCH_SIZE, total_batches, i, space_remaining, &total_edge_blocks_count_batch, &init_time);
 
+            if(graph_choice == 1)
+                generate_csr_batch(vertex_size, edge_size, h_source, h_destination, h_csr_offset_new, h_csr_edges_new, h_source_degrees_new, h_edge_blocks_count, h_prefix_sum_edge_blocks_new, h_batch_update_data, BATCH_SIZE, total_batches, i, space_remaining, &total_edge_blocks_count_batch, &init_time);
+            else {
+
+                generate_random_batch(vertex_size, BATCH_SIZE, h_source, h_destination, h_source_degrees_new);
+                std::cout << "Generated random batch" << std::endl;
+                generate_csr_batch(vertex_size, edge_size, h_source, h_destination, h_csr_offset_new, h_csr_edges_new, h_source_degrees_new, h_edge_blocks_count, h_prefix_sum_edge_blocks_new, h_batch_update_data, BATCH_SIZE, total_batches, i, space_remaining, &total_edge_blocks_count_batch, &init_time);
+                std::cout << "Generated CSR batch" << std::endl;
+
+            }
             // std::cout << "Total edge blocks is " << total_edge_blocks_count_batch  << std::endl;
 
             // std::cout << std::endl << "Printing batched CSR" << std::endl << "Source degrees\t\t" << std::endl;
@@ -3948,6 +4562,8 @@ int main(void) {
             thrust::copy(h_csr_edges_new.begin(), h_csr_edges_new.end(), d_csr_edges_new.begin());
             thrust::copy(h_edge_blocks_count.begin(), h_edge_blocks_count.end(), d_edge_blocks_count.begin());
             thrust::copy(h_prefix_sum_edge_blocks_new.begin(), h_prefix_sum_edge_blocks_new.end(), d_prefix_sum_edge_blocks_new.begin());
+            // thrust::copy(h_source.begin(), h_source.begin() + BATCH_SIZE, d_source.begin());
+            // thrust::copy(h_destination.begin(), h_destination.begin() + BATCH_SIZE, d_destination.begin());
 
             temp_time = clock();
 
@@ -4000,6 +4616,7 @@ int main(void) {
 
             adjacency_list_init_modded_v5<<< thread_blocks, THREADS_PER_BLOCK>>>(device_edge_block, d_edge_blocks_count_pointer, total_edge_blocks_count_batch, vertex_size, edge_size, d_prefix_sum_edge_blocks_new_pointer, thread_blocks, device_vertex_dictionary, i, current_batch, start_index, end_index, d_csr_offset_new_pointer, d_csr_edges_new_pointer);
             update_edge_queue<<< 1, 1>>>(total_edge_blocks_count_batch);
+            // printKernelmodded_v2<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
 
             cudaDeviceSynchronize();
             memory_usage();
@@ -4007,18 +4624,55 @@ int main(void) {
 
             std::cout << "Insert done" << std::endl;
 
+            // cbt_stats<<< 1, 1>>>(device_vertex_dictionary, vertex_size);
+
             // if(i != 7) {
             //     std::cout << "Hit here" << std::endl;
             // }
             // temp_time = clock() - temp_time;
             al_time += temp_time;
 
+            d_csr_edges_new.resize(1);
+            d_csr_offset_new.resize(1);
+
+            // d_csr_offset_new.clear();
+            // device_vector<T>().swap(d_csr_offset_new);
+            // d_csr_edges_new.clear();
+            // device_vector<T>().swap(d_csr_edges_new);
+            // d_csr_offset_new.shrink_to_fit();
+            // d_csr_edges_new.shrink_to_fit();
+
+            cudaDeviceSynchronize();
+
+            thrust::device_vector <unsigned long> d_source(BATCH_SIZE);
+            thrust::device_vector <unsigned long> d_destination(BATCH_SIZE);
+            unsigned long* d_source_pointer = thrust::raw_pointer_cast(d_source.data());
+            unsigned long* d_destination_pointer = thrust::raw_pointer_cast(d_destination.data());
+            thrust::copy(h_source.begin(), h_source.begin() + BATCH_SIZE, d_source.begin());
+            thrust::copy(h_destination.begin(), h_destination.begin() + BATCH_SIZE, d_destination.begin());
+
             cudaDeviceSynchronize();
             delete_time = clock();
             // thread_blocks = ceil(double(vertex_size) / THREADS_PER_BLOCK);
-            // batched_delete_preprocessing<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size);
+            // batched_delete_preprocessing<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, d_csr_offset_new_pointer, d_prefix_sum_edge_blocks_new_pointer, d_source_degrees_new_pointer);
+            // thread_blocks = ceil(double(total_edge_blocks_count_batch) / THREADS_PER_BLOCK);
+            // batched_delete_kernel_v1<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, total_edge_blocks_count_batch, d_csr_offset_new_pointer, d_csr_edges_new_pointer, d_prefix_sum_edge_blocks_new_pointer);
+
+            // Below is the code for edge-centric batch deletes
             thread_blocks = ceil(double(vertex_size) / THREADS_PER_BLOCK);
-            batched_delete_kernel<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, batch_size, d_csr_offset_new_pointer, d_csr_edges_new_pointer);
+            batched_delete_preprocessing_edge_centric<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, d_csr_offset_new_pointer, d_prefix_sum_edge_blocks_new_pointer, d_source_degrees_new_pointer);
+            thread_blocks = ceil(double(batch_size) / THREADS_PER_BLOCK);
+            batched_delete_kernel_edge_centric<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, batch_size, d_csr_offset_new_pointer, d_csr_edges_new_pointer, d_prefix_sum_edge_blocks_new_pointer, d_source_pointer, d_destination_pointer);
+
+            // Below is the test code for parallelized edge-centric batch deletes
+            // thread_blocks = ceil(double(vertex_size) / THREADS_PER_BLOCK);
+            // batched_delete_preprocessing<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, d_csr_offset_new_pointer, d_prefix_sum_edge_blocks_new_pointer, d_source_degrees_new_pointer);
+            // thread_blocks = ceil(double(batch_size * EDGE_BLOCK_SIZE) / THREADS_PER_BLOCK);
+            // batched_delete_kernel_edge_centric_parallelized<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, batch_size * EDGE_BLOCK_SIZE, batch_size, d_csr_offset_new_pointer, d_csr_edges_new_pointer, d_prefix_sum_edge_blocks_new_pointer, d_source_pointer, d_destination_pointer);
+
+
+            // thread_blocks = ceil(double(vertex_size) / THREADS_PER_BLOCK);
+            // batched_delete_kernel<<< thread_blocks, 1024>>>(device_vertex_dictionary, vertex_size, batch_size, d_csr_offset_new_pointer, d_csr_edges_new_pointer);
             cudaDeviceSynchronize();
             delete_time = clock() - delete_time;
             // std::cout << "Batch #" << i << " took " << (float)temp_time/CLOCKS_PER_SEC << " seconds" << std::endl;
